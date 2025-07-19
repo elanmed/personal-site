@@ -29,6 +29,7 @@ export default function About({
     "quickfix-preview.nvim",
     "rg-glob-builder.nvim",
     "ft-highlight.nvim",
+    "fzf-lua-frecency.nvim",
   ];
   const libraryRepos = repos.filter(({ name }) => libraryRepoNames.includes(name));
   const restRepos = repos.filter(({ name }) => !libraryRepoNames.includes(name));
