@@ -5,8 +5,8 @@
     <description>An rss feed for Elan Medoff's blog</description>
     <atom:link href="https://elanmed.dev/rss.xml" rel="self" type="application/rss+xml" />
     <language>en-us</language>
-    <pubDate>Sat, 24 May 2025 03:42:06 GMT</pubDate>
-    <lastBuildDate>Mon, 11 Nov 2024 05:00:00 GMT</lastBuildDate>
+    <pubDate>Tue, 29 Jul 2025 04:45:42 GMT</pubDate>
+    <lastBuildDate>Mon, 28 Jul 2025 04:00:00 GMT</lastBuildDate>
     <docs>https://www.rssboard.org/rss-specification</docs>
     <managingEditor>info@elanmed.dev (Elan Medoff)</managingEditor>
     
@@ -46,9 +46,16 @@
     <guid>https://elanmed.dev/dark-mode-server-side-approach</guid>
     </item>
     <item>
-    <title>Five Interesting Things From my Neovim Config</title>
+    <title>Five Interesting Things From my Neovim Config (2025 Edition)</title>
+    <link>https://elanmed.dev/blog/five-interesting-things-from-my-neovim-config-2025</link>
+    <description>A few more tips I've picked up since 2022</description>
+    <pubDate>Mon, 28 Jul 2025 04:00:00 GMT</pubDate>
+    <guid>https://elanmed.dev/five-interesting-things-from-my-neovim-config-2025</guid>
+    </item>
+    <item>
+    <title>Five Interesting Things From my Neovim Config (2022 Edition)</title>
     <link>https://elanmed.dev/blog/five-interesting-things-from-my-neovim-config</link>
-    <description>A few interesting tidbits I've picked up from tinkering with my config</description>
+    <description>A few interesting tips I've picked up from tinkering with my config</description>
     <pubDate>Sun, 16 Oct 2022 04:00:00 GMT</pubDate>
     <guid>https://elanmed.dev/five-interesting-things-from-my-neovim-config</guid>
     </item>
