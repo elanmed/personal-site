@@ -168,7 +168,9 @@ For example, I use the following remaps to copy the current line / visual select
 paste it un-commented below.
 
 ```lua
--- `expr = true` is necessary to have the native `gcc` comment as expected
+-- `expr = true` is necessary when returning a string that's meant to be run
+-- `remap = true` is necessary to have the native `gcc` comment as expected
+
 vim.keymap.set("n", "<leader>yc",
   function()
     local z_register = [["z]]
