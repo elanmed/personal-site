@@ -1,0 +1,282 @@
+---
+title: "Five Interesting Things From my Neovim Config (2025 Edition)"
+abstract: "A few more tips I've picked up since 2022"
+lastUpdated: "July 28, 2025"
+slug: five-interesting-things-from-my-neovim-config-2025
+tags:
+  - software eng
+  - vim
+isPublished: true
+collection:
+  name: "interesting-vim"
+  order: 0
+---
+
+# Five Interesting Things From my Neovim Config (2025 Edition)
+
+Way back in 2022, I wrote a post titled
+[Five Interesting Things From my Neovim Config](/five-interesting-things-from-my-neovim-config) with
+a handful of tips I came up with when converting my editor setup from VSCode to Neovim. It's been a
+few years since then, my config has changed quite a bit, and I like to think I've grown in my vim
+knowledge. So - it's time for a sequel!
+
+## 1. Require-ing every file in a directory
+
+One nifty aspect of the [`lazy.nvim`](https://lazy.folke.io/) plugin manager is its approach to
+[structuring](https://lazy.folke.io/usage/structuring) plugin configuration files: any
+`~/.config/nvim/lua/plugins/*.lua` file is automatically sourced and its configuration applied - no
+manual `require` necessary.
+
+I personally don't use `lazy.nvim` (I prefer the simplicity of
+[`paq-nvim`](https://github.com/savq/paq-nvim)), but I really like the idea of automatically
+`require`-ing every lua module in a directory. I prefer to split up plugin configuration into one
+file per "area", and it feels a little clunky to manually require each file. After tinkering for a
+bit, I was able to write a simple function to handle this for me:
+
+```lua
+--- @param dir string i.e. "plugins"
+local require_dir = function(dir)
+  -- ~/.config/nvim/lua/
+  local base_lua_path = vim.fs.joinpath(vim.fn.stdpath "config", "lua")
+
+  -- i.e. ~/.config/nvim/lua/plugins/*.lua
+  local glob_path = vim.fs.joinpath(base_lua_path, dir, "*.lua")
+
+  local paths_str = vim.fn.glob(glob_path)
+  local paths_tbl = vim.split(paths_str, "\n")
+
+  for _, path in pairs(paths_tbl) do
+    -- convert absolute filename to relative
+    -- ~/.config/nvim/lua/plugins/config_file.lua -> plugins/config_file
+    local relfilename = vim.fs.relpath(base_lua_path, path):gsub(".lua", "")
+    require(relfilename)
+  end
+end
+```
+
+Just one call to `h.require_dir "plugins"`!
+
+## 2. A guide to choosing remaps
+
+This second point is less of a tip and more of a philosophy I've developed when creating remaps.
+Philosophy is a bit of a strong word, but I find it useful nonetheless.
+
+1. If there's a builtin remap, use it
+
+   There was a time when I remapped:
+
+   - `J` to `:cnext`
+   - `K` to `:cprev`
+   - `Z` to `J`
+   - `gh` to `vim.lsp.buf.hover` (the default `K` remap).
+
+   I wanted `J` and `K` to navigate the quickfix list, and I was willing to sacrifice any and all
+   native remap to get to that goal.
+
+   But Neovim already has native remaps for `:cnext` and `:cprev`: `]q` and `[q`! By using the `]`
+   remaps instead, I was able to restore the native `J` `K` remaps, and everything felt simpler.
+
+2. Extend builtin remaps
+
+   If a remap makes sense as an extension of an existing, builtin remap, I try to use it. For
+   example, I use the native `gri` / `gra` / `grn` / `grr` LSP remaps. However, one LSP function
+   without a builtin remap is `vim.lsp.buf.type_definition` - which I use quite frequently.
+   Following the pattern of the `gr*` remaps, something like `gry` works great.
+
+3. Prioritize one-letter remaps
+
+   Earlier versions of my config had too many `<leader>`-two-letter remaps and too few
+   `<leader>`-one-letter remaps. At the time, I was nervous about hogging a letter for a one-letter
+   remap when I could use that letter to begin 26 different two-letter remaps instead. How many
+   remaps did I think I would write?
+
+   One-letter remaps are valuable real estate, and they should be used! These days, I try to use as
+   many one-letter remaps as I can with as few two-letter remaps as possible. In my config today, 21
+   letters are used as one-letter remaps, with only 5 for two letter remaps.
+
+   Few of these one-letter remaps have mnemonic meaning, but that's a tradeoff I'm happy to make.
+
+## 3. Barebones snippets with the read command
+
+There's a great vim talk titled
+[How to Do 90% of What Plugins Do (With Just Vim)](https://www.youtube.com/watch?v=XA2WjJbmmoM) that
+I've watched it a handful of times - it's really fun, I'd recommend it.
+
+One of the tips in the talk is to use the `:read` command to act as a barebones snippet replacement.
+The idea is to split your snippets into one snippet per file and use the `:read` command to insert
+the content of the snippet file at your cursor. By default, `:read` will insert a file below the
+cursor - but prepending the command with `-1` inserts the file at the cursor instead. Optionally,
+you can also execute vim movements with `:normal!` to move the cursor to the correct spot before
+editing.
+
+There's a few reasons I really like this approach:
+
+1. It's simple, no plugin required
+2. No snippet syntax to learn, just the plain text of your snippet along with some vim movements
+3. Snippets can be stored in files that match their language, allowing syntax highlighting to
+   function properly
+
+Here's the code I use:
+
+```lua
+vim.keymap.set("i", "<C-t>", "<C-o>:Snippet<space>")
+vim.keymap.set({ "n", "v", }, "<C-t>", function()
+  vim.notify("Snippets are only supported in insert mode!", vim.log.levels.ERROR)
+end)
+
+vim.api.nvim_create_user_command("Snippet", function(opts)
+  local snippet_trigger_to_file_mapping = {
+    eff = { file = "useEffect.ts", movement = "ji\t", },
+    -- ...
+  }
+
+  local snippet_trigger = opts.fargs[1]
+
+  if snippet_trigger == nil then
+    print "Available snippet triggers:"
+    for trigger in pairs(snippet_trigger_to_file_mapping) do
+      print(trigger)
+    end
+    return
+  end
+
+  local snippet_triggers = vim.tbl_keys(snippet_trigger_to_file_mapping)
+  if not vim.tbl_contains(snippet_triggers, snippet_trigger) then
+    vim.notify(snippet_trigger .. " is not a valid snippet trigger!", vim.log.levels.ERROR)
+    return
+  end
+
+  -- I store my snippets at ~/.config/nvim/snippets/
+  local snippets_path = vim.fs.joinpath(vim.fn.stdpath "config", "snippets")
+  local snippet_file = vim.fs.joinpath(snippets_path, snippet_trigger_to_file_mapping[snippet_trigger].file)
+
+  vim.cmd("-1read " .. snippet_file)
+  vim.cmd("normal! " .. snippet_trigger_to_file_mapping[snippet_trigger].movement)
+end, { nargs = "*", })
+```
+
+Using a barebones approach like this lacks some of the fancier features of "true" snippets - but it
+does everything I need it to, and that's enough for me.
+
+## 4. Splitting up remaps by concatenating
+
+Complex vim remaps can be a lot of fun to write, but a pain to read. Recently, I started splitting
+up complex remaps into variables and concatenating them into a big string. It's verbose, but in my
+opinion it's simpler to maintain.
+
+For example, I use the following remaps to copy the current line / visual selection, comment it, and
+paste it un-commented below.
+
+```lua
+-- `expr = true` is necessary to have the native `gcc` comment as expected
+vim.keymap.set("n", "<leader>yc",
+  function()
+    local z_register = [["z]]
+    local yank = "yy"
+    local comment = "gcc"
+    local paste = "p"
+    return z_register .. yank .. comment .. z_register .. paste
+  end,
+  { expr = true, remap = true, desc = "Yank the current line, comment it, and paste it below", })
+
+vim.keymap.set("v", "<leader>yc",
+  function()
+    local z_register = [["z]]
+    local yank_and_unselect = "y"
+    local move_to_end_selection = "`>"
+    local paste = "p"
+    local reselect_last = "gv"
+    local comment_selection = "gc"
+    return
+        z_register ..
+        yank_and_unselect ..
+        reselect_last ..
+        comment_selection ..
+        move_to_end_selection ..
+        z_register ..
+        paste ..
+        move_to_end_selection
+  end, { expr = true, remap = true, desc = "Yank the current selection, comment it, and paste it below", })
+```
+
+## 5. The Poor Man's Harpoon
+
+After reading this github [discussion](https://github.com/neovim/neovim/discussions/33335) on
+replacing Harpoon with global marks, I was inspired to try my own hand at a similar set of remaps.
+
+The idea behind these remaps is to bookmark "active" files with global marks and view them with a
+picker - simple, but an effective way to keep track of a handful of files at once.
+
+In my version, I wanted to set a global mark without ever thinking about the name of the mark
+itself - it doesn't really matter to me if the mark is `A` or `B`, I just want the file bookmarked.
+
+```lua
+--- @param mark_name string
+local function is_global_mark_unset(mark_name)
+  local mark = vim.api.nvim_get_mark(mark_name, {})
+  -- :h nvim_get_mark
+  -- (0, 0, 0, '') is returned if the mark is not set
+  return mark[1] == 0 and mark[2] == 0 and mark[3] == 0 and mark[4] == ""
+end
+
+--- @param mark_name string
+local function is_buffer_mark_unset(mark_name)
+  local mark = vim.api.nvim_buf_get_mark(0, mark_name)
+  -- :h nvim_buf_get_mark
+  -- (0, 0) is returned if the mark is not set
+  return mark[1] == 0 and mark[2] == 0
+end
+
+local global_marks = ("abcdefghijklmnopqrstuvwxyz"):upper()
+
+vim.keymap.set("n", "gm", function()
+  --- @param letter string
+  local function set_mark(letter)
+    local row = vim.fn.line "."
+    local col = 0
+    vim.api.nvim_buf_set_mark(0, letter, row, col, {})
+    vim.notify(("Set global mark %s to line %s"):format(letter, row))
+  end
+
+  -- If a global mark exists in the current buffer, update it to the current line
+  for letter in global_marks:gmatch "." do
+    local is_buffer_mark_set = not is_buffer_mark_unset(letter)
+
+    if is_buffer_mark_set then
+      set_mark(letter)
+      return
+    end
+  end
+
+  local next_avail_mark = nil
+  for letter in global_marks:gmatch "." do
+    if is_global_mark_unset(letter) then
+      next_avail_mark = letter
+      break
+    end
+  end
+
+  if next_avail_mark == nil then
+    vim.notify "No global marks available!"
+    return
+  end
+
+  -- Add a global mark to the buffer
+  set_mark(next_avail_mark)
+end, { desc = "Set a global mark for the buffer", })
+
+vim.keymap.set("n", "dgm", function()
+  for letter in global_marks:gmatch "." do
+    local is_buffer_mark_set = not is_buffer_mark_unset(letter)
+
+    if is_buffer_mark_set then
+      vim.api.nvim_del_mark(letter)
+      vim.notify("Deleted global mark " .. letter)
+      return
+    end
+  end
+  vim.notify "No global mark in the buffer"
+end, { desc = "Delete a global mark for the buffer", })
+```
+
+That's it for now - I'll be back for part three in another three years!
