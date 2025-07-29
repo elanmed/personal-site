@@ -60,7 +60,7 @@ export default function PostPage({
         <meta name="description" content={post.metadata.abstract} key="desc" />
         <meta property="og:title" content={title} />
         <meta property="og:description" content={post.metadata.abstract} />
-        <meta property="og:image" content="https://elanmed.dev/og.jpg" />
+        {/* <meta property="og:image" content="https://elanmed.dev/og.jpg" /> */}
       </Head>
       <Header />
       <Content>

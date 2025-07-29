@@ -20,7 +20,7 @@ export default function Bonus({ paths }: Props) {
         <meta name="description" content={description} key="desc" />
         <meta property="og:title" content={title} />
         <meta property="og:description" content={description} />
-        <meta property="og:image" content="https://elanmed.dev/og.jpg" />
+        {/* <meta property="og:image" content="https://elanmed.dev/og.jpg" /> */}
       </Head>
       <Header />
       <WideContent>
