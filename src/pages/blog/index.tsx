@@ -189,8 +189,8 @@ export default function Blog({ allMetadata, serverSideSearchString }: Props) {
       </Head>
       <Header hideOnScroll={false} />
       <Content>
-        <div className="flex gap-9 md:gap-16 flex-wrap-reverse md:flex-nowrap">
-          <section className="w-full md:w-1/2">
+        <div className="flex gap-9 lg:gap-16 flex-wrap-reverse lg:flex-nowrap">
+          <section className="w-full lg:w-1/2">
             <Spacing vertical md>
               <motion.div animate={controls} className="relative">
                 <input
@@ -261,7 +261,7 @@ export default function Blog({ allMetadata, serverSideSearchString }: Props) {
               ) : null}
             </Spacing>
           </section>
-          <section className="w-full md:w-1/2 self-start md:sticky md:top-20" data-testid="sidebar">
+          <section className="w-full lg:w-1/2 self-start lg:sticky lg:top-20" data-testid="sidebar">
             <Spacing vertical xl>
               <Spacing vertical sm>
                 <Subtitle>tags</Subtitle>

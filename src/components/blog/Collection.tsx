@@ -25,9 +25,8 @@ export function Collection({
         />
       ))}
       className={cn(
-        "xs:max-w-[300px]",
-        "[@media(min-width:450px)]:max-w-[400px]",
-        "xl:max-w-[500px]",
+        "max-w-[250px]",
+        "sm:max-w-[400px]",
         "overflow-hidden sm:overflow-visible",
         "px-8 sm:p-0",
         "overflow-hidden",
