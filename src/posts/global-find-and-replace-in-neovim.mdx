@@ -203,7 +203,7 @@ vim.api.nvim_set_keymap(
 
 First, the `nargs = "*"` indicates that our user command can take any number of arguments. The
 arguments are passed through `opts.fargs` as entries in a dictionary. We can interpolate the values
-with `string.format` (remember that Lua is 1-indexed!), and execute the command with `nvim_command`.
+with `string.format` (remember that Lua is 1-indexed), and execute the command with `nvim_command`.
 We run the `cfdo update` command to save each file in the quickfix list, and finally set a
 key-mapping.
 

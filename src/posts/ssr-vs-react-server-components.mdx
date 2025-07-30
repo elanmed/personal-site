@@ -100,7 +100,7 @@ A few interesting tradeoffs to consider:
    components
 
 - However, a client component can render a server component as a child if it's passed down as a
-  prop!
+  prop.
 
 2. Server components can't have any kind of interactivity or state
 3. Any code or libraries imported into a server component isn't shipped to the client - only the
@@ -165,7 +165,7 @@ Let's go through the request lifecycle for our new code and compare it to the Ne
 
 <Info>
   Unlike SSR, whose bundle includes the React code for `Parent` and `Child`, the bundle when using
-  SCA only includes the code for `Child`!
+  SCA only includes the code for `Child`
 </Info>
 
 3. The browser paints the html for the user to see, and fetches the javascript bundle from the
@@ -173,7 +173,7 @@ Let's go through the request lifecycle for our new code and compare it to the Ne
 4. The javascript bundle is fetched and executed, booting up the React runtime on the browser
 5. React (on the browser) runs the code necessary to render `Child`. Unlike SSR, there's no
    hydration - the only components which would need to be hydrated (i.e. stateful client components)
-   were never rendered to dehydrated html in the first place!
+   were never rendered to dehydrated html in the first place.
 
 ## Main Differences Between SSR and Server Component Architecture
 
@@ -184,7 +184,7 @@ Let's really hammer in the differences between these two lifecycles.
    if `Parent` imported a heavy date formatting library - with SSR, the whole library would be sent
    to the browser, while with server components, it's not.
 2. The reason the React code for `Parent` isn't sent in the javascript bundle with SCA is that
-   server components don't need to hydrate! Remember, hydration is the process of adding state and
+   server components don't need to hydrate. Remember, hydration is the process of adding state and
    event listeners to dehydrated html - but server components, by definition, don't have any
    interactivity. Meanwhile, client components are _only_ rendered on the client - they're never
    rendered to dehydrated html on the server.

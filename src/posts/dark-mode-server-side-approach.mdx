@@ -270,7 +270,7 @@ Let's walk through the code.
 
 If the idiosyncrasies of `getInitialProps` are too much for you, I'll quickly outline an alternative
 approach with `getServerSideProps`. Be warned though, every page in the `pages` directory will need
-to be wrapped in context!
+to be wrapped in context.
 
 ## Alternate approach with getServerSideProps
 
@@ -319,7 +319,7 @@ export default function Blog({
 
 export const getServerSideProps = (async ({ req, res }) => {
   // no longer need to check that req and res are defined
-  // since getServerSideProps only runs on the server!
+  // since getServerSideProps only runs on the server
 
   const isDarkModeCookie = cookie.parse(req.headers.cookie || "").isDarkMode as string | undefined;
 
@@ -391,7 +391,7 @@ export default function MyApp({ Component, pageProps, isDarkModeCookie }: AppPro
         maxAge: ONE_YEAR,
         path: "/",
       });
-      // don't call setIsDarkMode or you might have a flash!
+      // don't call setIsDarkMode or you might have a flash
       return;
     }
 
@@ -448,7 +448,7 @@ no `isDarkModeCookie` set, which means this is the first time a user has visited
 a media query to check if the user has an os-level theme preference, and if they do, set the
 `isDarkMode` cookie accordingly. Why not also call `setIsDarkMode` to match this preference? If
 there was a mismatch between the default theme and the os-level theme preference, updating the state
-would cause a rerender and create a flash - exactly what we're trying to avoid!
+would cause a rerender and create a flash - exactly what we're trying to avoid.
 
 Instead, let's allow our state and cookie to be misaligned for just a little while. In fact, as soon
 as the user directly sets the state with `setIsDarkMode`, `isDarkMode` won't be `null`, we'll skip

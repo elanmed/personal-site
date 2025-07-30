@@ -193,7 +193,7 @@ function FormatNumber({ num: number }) {
 <Info>
 
 **Note**: when null checking a number or string, a simple `if (!prop)` check is most likely _not_
-what you want – it will return `false` with `0` or `""`!
+what you want – it will return `false` with `0` or `""`.
 
 </Info>
 
@@ -251,7 +251,7 @@ function FormatNumber({ num: number }) {
 ```
 
 TypeScript now gives us a compile time error that `data?.id` may be `undefined`, and
-`FormatNumber`'s `num` prop can only be a `number`!
+`FormatNumber`'s `num` prop can only be a `number`.
 
 To fix this error, we can either return early, or modify our inline null checking to use a fallback
 value.

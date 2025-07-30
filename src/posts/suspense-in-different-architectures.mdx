@@ -100,7 +100,7 @@ complicated, and you're probably better off letting a library take care of it.
 
 That's all to say that if your library supports it, you can wrap your component in a `<Suspense />`,
 specify a `fallback`, add an error boundary to catch any rejected promises, and you never have to
-worry about `isLoading` or `isError` states again!
+worry about `isLoading` or `isError` states again.
 
 ```tsx
 function Post() {
@@ -109,7 +109,7 @@ function Post() {
 
   // you can assume data will be fully fetched, since React will
   // "suspend" the component when the data's loading and this
-  // code won't be executed!
+  // code won't be executed
   return <div>{data}</div>;
 }
 
@@ -146,7 +146,7 @@ Compared with client-side rendering, server-side provides a better user experien
 page-load since the user can look at some server-generated html while your javascript bundle loads
 and executes. However, look is all they can do - without javascript, the page can't be interacted
 with. Magnifying this problem is the fact that the _entire_ page needs to be hydrated before _any_
-of it can be interacted with! Enter use-case three of `Suspense`: selective hydration.
+of it can be interacted with. Enter use-case three of `Suspense`: selective hydration.
 
 By wrapping a component in `Suspense`, React will hydrate it separately from the rest of the page.
 At first glance, this may not seem too beneficial: if all the dehydrated html is sent to the client
@@ -168,7 +168,7 @@ _quite_ accurate, though, for two reasons:
   Note that the current generation of SSR frameworks do _not_ support selective hydration - as far
   as I can tell, only Next.js applications using the `app` directory support selective hydration for
   client-components rendered to html on the server. Check out my blog post on [SSR vs Server
-  components](/blog/ssr-vs-react-server-components) for more info!
+  components](/blog/ssr-vs-react-server-components) for more info
 </Info>
 
 ## Server components
@@ -190,7 +190,7 @@ export default async function Post() {
 Notice that the function/component is asynchronous! You can just wait for your data to load, then
 render your content to html and send it to the client. Simple and elegant, but not a great user
 experience - until the asynchronous action completes, your component is blocked, and the user sees
-nothing from your component! In fact, this situation is exactly what loading states were created
+nothing from your component. In fact, this situation is exactly what loading states were created
 for. So how can we give a loading state to our server component? `Suspense`.
 
 By wrapping your asynchronous server component in a `<Suspense />`, React will render and send the

@@ -54,7 +54,7 @@ local require_dir = function(dir)
 end
 ```
 
-Just one call to `h.require_dir "plugins"`!
+Just one call to `h.require_dir "plugins"`.
 
 ## 2. A guide to choosing remaps
 
@@ -121,7 +121,7 @@ Here's the code I use:
 ```lua
 vim.keymap.set("i", "<C-t>", "<C-o>:Snippet<space>")
 vim.keymap.set({ "n", "v", }, "<C-t>", function()
-  vim.notify("Snippets are only supported in insert mode!", vim.log.levels.ERROR)
+  vim.notify("Snippets are only supported in insert mode", vim.log.levels.ERROR)
 end)
 
 vim.api.nvim_create_user_command("Snippet", function(opts)
@@ -142,7 +142,7 @@ vim.api.nvim_create_user_command("Snippet", function(opts)
 
   local snippet_triggers = vim.tbl_keys(snippet_trigger_to_file_mapping)
   if not vim.tbl_contains(snippet_triggers, snippet_trigger) then
-    vim.notify(snippet_trigger .. " is not a valid snippet trigger!", vim.log.levels.ERROR)
+    vim.notify(snippet_trigger .. " is not a valid snippet trigger", vim.log.levels.ERROR)
     return
   end
 
@@ -259,7 +259,7 @@ vim.keymap.set("n", "gm", function()
   end
 
   if next_avail_mark == nil then
-    vim.notify "No global marks available!"
+    vim.notify "No global marks available"
     return
   end
 
@@ -280,5 +280,3 @@ vim.keymap.set("n", "dgm", function()
   vim.notify "No global mark in the buffer"
 end, { desc = "Delete a global mark for the buffer", })
 ```
-
-That's it for now - I'll be back for part three in another three years!
