@@ -24,22 +24,23 @@ buffer in Neovim with a command piped to `fzf`. This approach has some cool bene
   `fzf` in the shell
 
 There's downsides too, of course - aside from what's already included in `fzf`, you'll get nothing
-for free. If you like a feature-full picker, you should stick with `fzf-lua`: it's a great library.
-Even if you just want a set of barebones `fzf` functions, you should probably stick with `fzf`'s
-builtin helpers - [1000 LOC](https://github.com/junegunn/fzf/blob/master/plugin/fzf.vim) for a
-really robust set of primitives.
+for free. If you like a feature-full picker, you should stick with `fzf-lua`. Even if you just want
+a set of barebones `fzf` functions, you should probably stick with `fzf`'s builtin helpers -
+[1000 LOC](https://github.com/junegunn/fzf/blob/master/plugin/fzf.vim) for a robust set of
+primitives.
 
-But if you want to see how you could natively integrate `fzf` with Neovim yourself, keep reading.
+But if you're interested in how you could natively integrate `fzf` with Neovim yourself, this
+article might be for you.
 
 ---
 
 The core of our approach will be as follow:
 
 - Open a terminal buffer in Neovim
-- Run a command and output the result to `fzf` - either a traditional terminal command or a lua
-  script.
-  - To execute the lua script, we'll run a headless `nvim` instance and communicate with the primary
-    `nvim` instance using RPC.
+- Run a terminal command and output the result to `fzf`
+  - The command will either be a traditional terminal command or a lua script. To execute a lua
+    script, we'll run a headless `nvim` instance and communicate with the primary `nvim` instance
+    using RPC.
 - Interact with `fzf` in the terminal buffer to select your result(s)
 - Redirect `fzf`'s stdout to a temporary file and read it to access the selected items
 
@@ -63,9 +64,9 @@ vim.api.nvim_set_current_buf(term_bufnr)
 vim.fn.jobstart("fd", { term = true, })
 ```
 
-The results from `fd` are output to the terminal buffer, which can be closed as usual with
-`:bdelete`. This works, but I prefer a dedicated window to create a floating effect. Using
-`nvim_open_win`, this isn't too hard.
+In this code, `fd` is executed and its stdout is output in the terminal buffer as it would be in a
+regular terminal. A new buffer for the terminal buffer works, but I prefer a dedicated window to
+create a floating effect. Using `nvim_open_win`, this isn't too hard.
 
 ```lua
 local listed = false
@@ -87,8 +88,8 @@ vim.api.nvim_open_win(term_bufnr, enter, {
 vim.fn.jobstart("fd", { term = true, })
 ```
 
-Looks good! Now that we can create a terminal buffer in a dedicated floating window, how can we
-start fuzzy filtering with `fzf`?
+Looks good! Now that we can run a command in a terminal buffer in a dedicated floating window, how
+can we start fuzzy filtering with `fzf`?
 
 Just like in a regular terminal, we can pipe it:
 
@@ -137,7 +138,7 @@ convenient.
 
 ---
 
-To apply options to our `fzf` instance, we can simply pass them along to the terminal command:
+To apply options to our `fzf` process, we can simply pass them along to the terminal command:
 
 ```lua
 --- ... open the window
@@ -231,10 +232,10 @@ fzf {
 ## Part 2: Creating sources with headless nvim scripts
 
 The function we have works great for simple sources like `fd`, but how can we populate `fzf` with
-something Neovim-specific? Personally, I use global marks frequently in my workflow - let's use that
-as an example. How can we write a script that prints the current global marks so it can be piped to
-`fzf`? A cool approach is to run headless `nvim` scripts that communicate with the main `nvim`
-instance using RPC.
+something Neovim-specific? Personally, I like use global marks in my workflow - let's use that as an
+example. How can we write a script that outputs the current global marks so it can be piped to
+`fzf`? One approach is to run a lua script in a headless `nvim` instance which communicates with the
+main `nvim` instance using RPC.
 
 Let's start small: to execute a lua script with Neovim, we can use the `nvim` command as follows:
 
@@ -246,15 +247,13 @@ nvim --headless -l path/to/lua_script.lua
 
 `--headless` does what it sounds like, and `-l` executes the next argument as a lua script.
 
-Like our `fd` command, we want our `nvim --headless -l path/to/lua_script.lua` command to print to
+Like our `fd` command, we want the `nvim --headless -l path/to/lua_script.lua` command to print to
 stdout so it can be piped to `fzf`. This can be achieved with `io.write`:
 
 ```lua
 -- path/to/lua_script.lua
 for _, item in pairs { "one", "two", "three", } do
-  io.write(item)
-  io.write "\n"
-  io.flush()
+  io.write(item .. "\n")
 end
 
 -- main nvim config
@@ -276,9 +275,7 @@ necessary. Try this out:
 -- path/to/lua_script.lua
 for _, item in pairs { "one", "two", "three", } do
   vim.cmd "sleep"
-  io.write(item)
-  io.write "\n"
-  io.flush()
+  io.write(item .. "\n")
 end
 ```
 
@@ -335,10 +332,8 @@ for _, mark_entry in pairs(mark_list) do
   local name = mark_entry.mark:sub(2, 2)
   if not global_marks:find(name) then goto continue end
 
-  local output = ("%s|%s"):format(name, vim.fs.normalize(mark_entry.file))
-  io.write(output)
-  io.write "\n"
-  io.flush()
+  local formatted_mark = ("%s|%s"):format(name, vim.fs.normalize(mark_entry.file))
+  io.write(formatted_mark .. "\n")
 
   ::continue::
 end
@@ -365,7 +360,7 @@ flags as well: `--delimiter='|'` and `--preview` to use `{2}` instead of `{1}`. 
 set, `fzf` will split a result by the passed delimiter, meaning `{2}` - the arg passed to `bat` -
 will be the filename.
 
-We can use a similar RPC approach for fzf actions as well:
+We can use a similar RPC approach for fzf actions as well, such as a keybinding to delete a mark:
 
 ```lua
 -- path/to/delete_mark.lua
@@ -405,7 +400,6 @@ fzf {
     [[--bind='ctrl-d:preview-page-down']],
     [[--bind='ctrl-u:preview-page-up']],
     [[--preview='bat --style=numbers --color=always {2}']],
-    -- new
     ([[--bind='ctrl-x:execute(%s {1})+reload(%s)']]):format(delete_mark_source, get_marks_source),
   },
   sink = function(entry)
