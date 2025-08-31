@@ -5,8 +5,8 @@
     <description>An rss feed for Elan Medoff's blog</description>
     <atom:link href="https://elanmed.dev/rss.xml" rel="self" type="application/rss+xml" />
     <language>en-us</language>
-    <pubDate>Tue, 29 Jul 2025 04:45:42 GMT</pubDate>
-    <lastBuildDate>Mon, 28 Jul 2025 04:00:00 GMT</lastBuildDate>
+    <pubDate>Sun, 31 Aug 2025 01:56:46 GMT</pubDate>
+    <lastBuildDate>Sat, 30 Aug 2025 04:00:00 GMT</lastBuildDate>
     <docs>https://www.rssboard.org/rss-specification</docs>
     <managingEditor>info@elanmed.dev (Elan Medoff)</managingEditor>
     
@@ -79,6 +79,13 @@
     <description>An introduction to a new series on the lessons learned from 1,000+ comics</description>
     <pubDate>Sun, 28 Aug 2022 04:00:00 GMT</pubDate>
     <guid>https://elanmed.dev/lessons-from-reading-a-thousand-comics</guid>
+    </item>
+    <item>
+    <title>Running fzf natively in Neovim</title>
+    <link>https://elanmed.dev/blog/native-fzf-in-neovim</link>
+    <description>Using a terminal buffer, RPC, and headless nvim instances for a barebones fzf-in-neovim</description>
+    <pubDate>Sat, 30 Aug 2025 04:00:00 GMT</pubDate>
+    <guid>https://elanmed.dev/native-fzf-in-neovim</guid>
     </item>
     <item>
     <title>Data Fetching in React: Parent-Agnostic vs Parent-Dependent Children</title>

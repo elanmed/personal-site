@@ -1,0 +1,427 @@
+---
+title: "Running fzf natively in Neovim"
+abstract: "Using a terminal buffer, RPC, and headless nvim instances for a barebones fzf-in-neovim"
+lastUpdated: "August 30, 2025"
+slug: native-fzf-in-neovim
+tags:
+  - software eng
+  - vim
+collection: null
+isPublished: false
+---
+
+# Running fzf natively in Neovim
+
+Recently, I've been experimenting with running fzf natively in Neovim. By natively, I mean without
+using [fzf.vim](https://github.com/junegunn/fzf.vim),
+[fzf-lua](https://github.com/ibhagwan/fzf-lua), or even `fzf`'s
+[built-in vim helpers](https://github.com/junegunn/fzf/blob/master/README-VIM.md). Just a terminal
+buffer in Neovim with a command piped to `fzf`. This approach has some cool benefits:
+
+- You can write a working proof of concept in ~50 LOC
+- It's performant - `fzf` opens immediately with results streaming in over time
+- It's consistent with `fzf` in the terminal - options are specified exactly as they are when using
+  `fzf` in the shell
+
+There's downsides too, of course - aside from what's already included in `fzf`, you'll get nothing
+for free. If you like a feature-full picker, you should stick with `fzf-lua`: it's a great library.
+Even if you just want a set of barebones `fzf` functions, you should probably stick with `fzf`'s
+builtin helpers - [1000 LOC](https://github.com/junegunn/fzf/blob/master/plugin/fzf.vim) for a
+really robust set of primitives.
+
+But if you want to see how you could natively integrate `fzf` with Neovim yourself, keep reading.
+
+---
+
+The core of our approach will be as follow:
+
+- Open a terminal buffer in Neovim
+- Run a command and output the result to `fzf` - either a traditional terminal command or a lua
+  script.
+  - To execute the lua script, we'll run a headless `nvim` instance and communicate with the primary
+    `nvim` instance using RPC.
+- Interact with `fzf` in the terminal buffer to select your result(s)
+- Redirect `fzf`'s stdout to a temporary file and read it to access the selected items
+
+We'll start at the top and work our way down.
+
+## Part 1: Running fzf in a terminal buffer
+
+First, we need to open a terminal buffer in Neovim (which itself is probably running in a terminal
+😅). This can be done with `vim.fn.jobstart()`, which takes in two args: the `cmd` string to run,
+and a table of `opts`.
+
+When `opts` is passed `term = true`, the command will be spawned in a terminal buffer connected to
+the current buffer. To create a dedicated buffer for the terminal, we can use `nvim_create_buf` and
+`nvim_set_current_buf`:
+
+```lua
+local listed = false
+local scratch = true
+local term_bufnr = vim.api.nvim_create_buf(listed, scratch)
+vim.api.nvim_set_current_buf(term_bufnr)
+vim.fn.jobstart("fd", { term = true, })
+```
+
+The results from `fd` are output to the terminal buffer, which can be closed as usual with
+`:bdelete`. This works, but I prefer a dedicated window to create a floating effect. Using
+`nvim_open_win`, this isn't too hard.
+
+```lua
+local listed = false
+local scratch = true
+local term_bufnr = vim.api.nvim_create_buf(listed, scratch)
+
+local editor_height = vim.o.lines - 1
+local border_height = 2
+local enter = true
+vim.api.nvim_open_win(term_bufnr, enter, {
+  relative = "editor",
+  row = editor_height,
+  col = 0,
+  width = vim.o.columns,
+  height = math.floor(editor_height / 2 - border_height),
+  border = "rounded",
+  title = "Fzf term",
+})
+vim.fn.jobstart("fd", { term = true, })
+```
+
+Looks good! Now that we can create a terminal buffer in a dedicated floating window, how can we
+start fuzzy filtering with `fzf`?
+
+Just like in a regular terminal, we can pipe it:
+
+```lua
+-- ... open the window
+vim.fn.jobstart("fd | fzf", {
+  term = true,
+  on_exit = function()
+    local force = true
+    vim.api.nvim_win_close(term_winnr, force)
+  end,
+})
+vim.cmd "startinsert"
+```
+
+By default, opening a terminal buffer puts us in normal mode where we can navigate the terminal like
+its any other buffer. In our case though, we want to interact with the `fzf` process in insert
+mode - `:startinsert` gets us there.
+
+We also added the `on_exit` callback, which does what it sounds like. Currently, we're using the
+callback to close the window when the `fzf` process exits - i.e. when selecting an item. But how do
+we actually read the item that was selected? A simple approach is to create a temporary file, pipe
+the output of `fzf` to the temp file, and read from the file in `on_exit` as well:
+
+```lua
+local tempname = vim.fn.tempname()
+-- ... open the window
+local cmd = ("fd | fzf > %s"):format(tempname)
+vim.fn.jobstart(cmd, {
+  term = true,
+  on_exit = function()
+    local force = true
+    vim.api.nvim_win_close(term_winnr, force)
+    local fzf_content = vim.fn.readfile(tempname)
+    if #fzf_content > 0 then
+      vim.cmd("edit " .. fzf_content[1])
+    end
+    vim.fn.delete(tempname)
+  end,
+})
+vim.cmd "startinsert"
+```
+
+`vim.fn.readfile` returns a list where each item is a line in the file that's passed to it - very
+convenient.
+
+---
+
+To apply options to our `fzf` instance, we can simply pass them along to the terminal command:
+
+```lua
+--- ... open the window
+local fzf_opts = {
+  "--cycle",
+  [[--bind='ctrl-d:preview-page-down']],
+  [[--bind='ctrl-u:preview-page-up']],
+  [[--preview='bat --style=numbers --color=always {1}']],
+}
+local formatted_opts = table.concat(fzf_opts, " ")
+local cmd = ("fd | fzf %s > %s"):format(formatted_opts, tempname)
+vim.fn.jobstart(cmd, {
+  term = true,
+  on_exit = function()
+    local force = true
+    vim.api.nvim_win_close(term_winnr, force)
+    local fzf_content = vim.fn.readfile(tempname)
+    if #fzf_content > 0 then
+      vim.cmd("edit " .. fzf_content[1])
+    end
+    vim.fn.delete(tempname)
+  end,
+})
+vim.cmd "startinsert"
+```
+
+This right here is the core of our functionality. Let's make it a bit more modular:
+
+```lua
+--- @class FzfOpts
+--- @field source string
+--- @field options? string[]
+--- @field sink? fun(entry: string)
+--- @field sinklist? fun(entry:string[])
+
+--- @param opts FzfOpts
+local function fzf(opts)
+  opts.options = opts.options or {}
+  local tempname = vim.fn.tempname()
+
+  local editor_height = vim.o.lines - 1
+  local border_height = 2
+
+  local listed = false
+  local scratch = true
+  local term_bufnr = vim.api.nvim_create_buf(listed, scratch)
+  local term_winnr = vim.api.nvim_open_win(term_bufnr, true, {
+    relative = "editor",
+    row = editor_height,
+    col = 0,
+    width = vim.o.columns,
+    height = math.floor(editor_height / 2 - border_height),
+    border = "rounded",
+    title = "Fzf term",
+  })
+
+  local cmd = ("%s | fzf %s > %s"):format(opts.source, table.concat(opts.options, " "), tempname)
+  vim.fn.jobstart(cmd, {
+    term = true,
+    on_exit = function()
+      vim.api.nvim_win_close(term_winnr, true)
+      local temp_content = vim.fn.readfile(tempname)
+      if #temp_content > 0 then
+        if opts.sink then
+          opts.sink(temp_content[1])
+        elseif opts.sinklist then
+          opts.sinklist(temp_content)
+        end
+      end
+
+      vim.fn.delete(tempname)
+    end,
+  })
+  vim.cmd "startinsert"
+end
+
+fzf {
+  source = "fd",
+  options = {
+    "--cycle",
+    [[--bind='ctrl-d:preview-page-down']],
+    [[--bind='ctrl-u:preview-page-up']],
+    [[--preview='bat --style=numbers --color=always {1}']],
+  },
+  sink = function(entry)
+    vim.cmd("edit " .. entry)
+  end,
+}
+```
+
+## Part 2: Creating sources with headless nvim scripts
+
+The function we have works great for simple sources like `fd`, but how can we populate `fzf` with
+something Neovim-specific? Personally, I use global marks frequently in my workflow - let's use that
+as an example. How can we write a script that prints the current global marks so it can be piped to
+`fzf`? A cool approach is to run headless `nvim` scripts that communicate with the main `nvim`
+instance using RPC.
+
+Let's start small: to execute a lua script with Neovim, we can use the `nvim` command as follows:
+
+```bash
+nvim --headless -l path/to/lua_script.lua
+```
+
+> An exercise for the reader: look into `--clean`, `-u NONE`, and `--noplugin` options
+
+`--headless` does what it sounds like, and `-l` executes the next argument as a lua script.
+
+Like our `fd` command, we want our `nvim --headless -l path/to/lua_script.lua` command to print to
+stdout so it can be piped to `fzf`. This can be achieved with `io.write`:
+
+```lua
+-- path/to/lua_script.lua
+for _, item in pairs { "one", "two", "three", } do
+  io.write(item)
+  io.write "\n"
+  io.flush()
+end
+
+-- main nvim config
+local source = table.concat({ "nvim", "--clean", "--headless", "-l", lua_script, }, " ")
+fzf {
+  source = source,
+  sink = function(entry)
+    vim.cmd("edit " .. entry)
+  end,
+}
+```
+
+This is a great foundation for using `lua` to generate and pipe items to `fzf`. One benefit to this
+approach is performance: since we're just piping a terminal command to `fzf`, `fzf` will open
+immediately and the items can filter in over time as they become available - no coroutines
+necessary. Try this out:
+
+```lua
+-- path/to/lua_script.lua
+for _, item in pairs { "one", "two", "three", } do
+  vim.cmd "sleep"
+  io.write(item)
+  io.write "\n"
+  io.flush()
+end
+```
+
+`fzf` even adds a little loading spinner as the results stream in.
+
+---
+
+Back to our goal of populating `fzf` with the current global marks. In order for the headless `nvim`
+instance to access state from the currently-open `nvim` instance, we need to use RPC. In short, RPC
+allows the headless `nvim` to run a function in the context of the main `nvim` instance and receive
+its return value. For example:
+
+```lua
+-- path/to/get_marks.lua
+local servername = 'TBD'
+local chan = vim.fn.sockconnect("pipe", servername, { rpc = true, })
+local mark_list = vim.rpcrequest(chan, "nvim_call_function", "getmarklist", {})
+vim.fn.chanclose(chan)
+```
+
+This code, run in a headless `nvim` instance, sets `mark_list` to the result of calling
+`vim.fn.getmarklist()` in the main `nvim` instance.
+
+In order to connect to the main `nvim` instance's RPC server, we need the name of the server to use.
+We can simply pass this along as an argument to the lua script:
+
+```lua
+-- main config
+local source = table.concat({ "nvim", "--clean", "--headless", "-l", path_to_lua_script, vim.v.servername, }, " ")
+```
+
+Using this info, we can write our `get_marks.lua` script:
+
+```lua
+-- path/to/get_marks.lua
+assert(arg[1], "Missing arg1: `servername`")
+local servername = arg[1]
+
+local chan = vim.fn.sockconnect("pipe", servername, { rpc = true, })
+
+--- @class MarkListEntry
+--- @field file string
+--- @field mark string
+
+--- @type MarkListEntry[] | nil
+local mark_list = vim.rpcrequest(chan, "nvim_call_function", "getmarklist", {})
+vim.fn.chanclose(chan)
+if mark_list == nil then return end
+
+local global_marks = ("abcdefghijklmnopqrstuvwxyz"):upper()
+
+for _, mark_entry in pairs(mark_list) do
+  -- marks are prefixed with '
+  local name = mark_entry.mark:sub(2, 2)
+  if not global_marks:find(name) then goto continue end
+
+  local output = ("%s|%s"):format(name, vim.fs.normalize(mark_entry.file))
+  io.write(output)
+  io.write "\n"
+  io.flush()
+
+  ::continue::
+end
+
+-- main config
+local source = table.concat({ "nvim", "--headless", "-l", path_to_lua_script, vim.v.servername, }, " ")
+fzf {
+  source = source,
+  options = {
+    "--delimiter='|'",
+    [[--bind='ctrl-d:preview-page-down']],
+    [[--bind='ctrl-u:preview-page-up']],
+    [[--preview='bat --style=numbers --color=always {2}']],
+  },
+  sink = function(entry)
+    local filename = vim.split(entry, "|")[2]
+    vim.cmd("edit " .. filename)
+  end,
+}
+```
+
+Note that our lua script formats the mark entry as `A|path/to/file`, so we need to update some `fzf`
+flags as well: `--delimiter='|'` and `--preview` to use `{2}` instead of `{1}`. With `--delimiter`
+set, `fzf` will split a result by the passed delimiter, meaning `{2}` - the arg passed to `bat` -
+will be the filename.
+
+We can use a similar RPC approach for fzf actions as well:
+
+```lua
+-- path/to/delete_mark.lua
+assert(arg[1], "Missing arg1: `servername`")
+assert(arg[2], "Missing arg2: `selected_mark`")
+
+local servername = arg[1]
+local selected_mark = arg[2]
+
+local chan = vim.fn.sockconnect("pipe", servername, { rpc = true, })
+vim.rpcrequest(chan, "nvim_del_mark", selected_mark)
+vim.fn.chanclose(chan)
+
+-- main config
+local get_marks_source = table.concat({
+    "nvim",
+    "--clean",
+    "--headless",
+    "-l",
+    path_to_get_marks_script,
+    vim.v.servername,
+}, " ")
+local delete_mark_source = table.concat({
+  "nvim",
+  "--clean",
+  "--headless",
+  "-l",
+  path_to_delete_mark_script,
+  vim.v.servername,
+}, " ")
+
+fzf {
+  source = get_marks_source,
+  options = {
+    "--delimiter='|'",
+    "--cycle",
+    [[--bind='ctrl-d:preview-page-down']],
+    [[--bind='ctrl-u:preview-page-up']],
+    [[--preview='bat --style=numbers --color=always {2}']],
+    -- new
+    ([[--bind='ctrl-x:execute(%s {1})+reload(%s)']]):format(delete_mark_source, get_marks_source),
+  },
+  sink = function(entry)
+    vim.cmd("edit " .. entry)
+  end,
+}
+```
+
+## Conclusion
+
+If you've used `fzf`'s builtin vim functions (i.e. `fzf#run`), the arguments to our homegrown `fzf`
+lua function might look familiar. That's no accident - this article came about because I was
+experimenting with `fzf#run`, and I was curious how it worked internally. I was pleasantly surprised
+by how seamless it is to connect `fzf` to Neovim with a terminal buffer - even with as little code
+as I have in this article.
+
+The RPC pattern in this article is pretty flexible - using this approach, you can likely build out
+all the classic pickers with standalone lua scripts. I'll leave that as an exercise for the reader.
+Thanks for reading.
