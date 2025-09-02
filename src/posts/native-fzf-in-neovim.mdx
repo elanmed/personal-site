@@ -65,8 +65,10 @@ vim.fn.jobstart("fd", { term = true, })
 ```
 
 In this code, `fd` is executed and its stdout is output in the terminal buffer as it would be in a
-regular terminal. A new buffer for the terminal buffer works, but I prefer a dedicated window to
-create a floating effect. Using `nvim_open_win`, this isn't too hard.
+regular terminal.
+
+Creating a new buffer for the terminal works fine, but I prefer a dedicated window to create a
+floating effect. Using `nvim_open_win`, this isn't too hard.
 
 ```lua
 local listed = false
