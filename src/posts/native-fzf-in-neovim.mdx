@@ -29,19 +29,18 @@ a set of barebones `fzf` functions, you should probably stick with `fzf`'s built
 [1000 LOC](https://github.com/junegunn/fzf/blob/master/plugin/fzf.vim) for a robust set of
 primitives.
 
-But if you're interested in how you could natively integrate `fzf` with Neovim yourself, this
-article might be for you.
+But if you're interested in how you could natively integrate `fzf` with Neovim yourself, read on.
 
 ---
 
-The core of our approach will be as follow:
+The core of our approach will be as follows:
 
 - Open a terminal buffer in Neovim
 - Run a terminal command and output the result to `fzf`
-  - The command will either be a traditional terminal command or a lua script. To execute a lua
-    script, we'll run a headless `nvim` instance and communicate with the primary `nvim` instance
-    using RPC.
-- Interact with `fzf` in the terminal buffer to select your result(s)
+  - The command will either be a traditional terminal command or a command to execute a standalone
+    lua script. For the latter, we'll execute the lua script in a headless `nvim` instance that can
+    communicate with the primary `nvim` instance using RPC.
+- Interact with `fzf` in the terminal buffer to select the result(s)
 - Redirect `fzf`'s stdout to a temporary file and read it to access the selected items
 
 We'll start at the top and work our way down.
@@ -67,8 +66,8 @@ vim.fn.jobstart("fd", { term = true, })
 In this code, `fd` is executed and its stdout is output in the terminal buffer as it would be in a
 regular terminal.
 
-Creating a new buffer for the terminal works fine, but I prefer a dedicated window to create a
-floating effect. Using `nvim_open_win`, this isn't too hard.
+Opening the terminal buffer in the current window works fine, but I prefer a dedicated window to
+create a floating effect. Using `nvim_open_win`, this isn't too hard.
 
 ```lua
 local listed = false
@@ -90,10 +89,10 @@ vim.api.nvim_open_win(term_bufnr, enter, {
 vim.fn.jobstart("fd", { term = true, })
 ```
 
-Looks good! Now that we can run a command in a terminal buffer in a dedicated floating window, how
-can we start fuzzy filtering with `fzf`?
+Looks good! Now that we can run a `fd` command in a terminal buffer, how can we start fuzzy
+filtering the output with `fzf`?
 
-Just like in a regular terminal, we can pipe it:
+Just like in a regular terminal, we can pipe the `fd` command to `fzf`:
 
 ```lua
 -- ... open the window
@@ -113,8 +112,8 @@ mode - `:startinsert` gets us there.
 
 We also added the `on_exit` callback, which does what it sounds like. Currently, we're using the
 callback to close the window when the `fzf` process exits - i.e. when selecting an item. But how do
-we actually read the item that was selected? A simple approach is to create a temporary file, pipe
-the output of `fzf` to the temp file, and read from the file in `on_exit` as well:
+we access the item that was selected? A simple approach is to create a temporary file, pipe the
+output of `fzf` to the temp file, and read from the file in `on_exit` as well:
 
 ```lua
 local tempname = vim.fn.tempname()
@@ -167,7 +166,7 @@ vim.fn.jobstart(cmd, {
 vim.cmd "startinsert"
 ```
 
-This right here is the core of our functionality. Let's make it a bit more modular:
+This right here is the core of our functionality. Let's make it a bit nicer:
 
 ```lua
 --- @class FzfOpts
@@ -259,7 +258,7 @@ for _, item in pairs { "one", "two", "three", } do
 end
 
 -- main nvim config
-local source = table.concat({ "nvim", "--clean", "--headless", "-l", lua_script, }, " ")
+local source = table.concat({ "nvim", "--clean", "--headless", "-l", path_to_lua_script, }, " ")
 fzf {
   source = source,
   sink = function(entry)
@@ -269,9 +268,9 @@ fzf {
 ```
 
 This is a great foundation for using `lua` to generate and pipe items to `fzf`. One benefit to this
-approach is performance: since we're just piping a terminal command to `fzf`, `fzf` will open
-immediately and the items can filter in over time as they become available - no coroutines
-necessary. Try this out:
+approach is performance: since we're piping a terminal command to `fzf`, `fzf` will open immediately
+and the items can filter in over time as they become available - no coroutines necessary. Try this
+out:
 
 ```lua
 -- path/to/lua_script.lua
@@ -292,7 +291,7 @@ its return value. For example:
 
 ```lua
 -- path/to/get_marks.lua
-local servername = 'TBD'
+local servername = 'TODO'
 local chan = vim.fn.sockconnect("pipe", servername, { rpc = true, })
 local mark_list = vim.rpcrequest(chan, "nvim_call_function", "getmarklist", {})
 vim.fn.chanclose(chan)
@@ -327,12 +326,10 @@ local mark_list = vim.rpcrequest(chan, "nvim_call_function", "getmarklist", {})
 vim.fn.chanclose(chan)
 if mark_list == nil then return end
 
-local global_marks = ("abcdefghijklmnopqrstuvwxyz"):upper()
-
 for _, mark_entry in pairs(mark_list) do
   -- marks are prefixed with '
   local name = mark_entry.mark:sub(2, 2)
-  if not global_marks:find(name) then goto continue end
+  if not name:match('[A-Z]') then goto continue end
 
   local formatted_mark = ("%s|%s"):format(name, vim.fs.normalize(mark_entry.file))
   io.write(formatted_mark .. "\n")
@@ -362,7 +359,7 @@ flags as well: `--delimiter='|'` and `--preview` to use `{2}` instead of `{1}`. 
 set, `fzf` will split a result by the passed delimiter, meaning `{2}` - the arg passed to `bat` -
 will be the filename.
 
-We can use a similar RPC approach for fzf actions as well, such as a keybinding to delete a mark:
+We can use a similar RPC approach for `fzf` actions as well, such as a keybinding to delete a mark:
 
 ```lua
 -- path/to/delete_mark.lua
