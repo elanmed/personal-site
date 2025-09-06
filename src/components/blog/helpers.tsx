@@ -5,6 +5,7 @@ import { Info } from "src/components/reusable/Info";
 import { MyLink, MyLinkProps } from "src/components/reusable/MyLink";
 import { Image } from "src/components/reusable/Image";
 import { HeaderLink } from "src/components/reusable/HeaderLink";
+import { AsciinemaPlayer } from "src/components/reusable/AsciinemaPlayer";
 
 export const orderPosts = (posts: Metadata[], method: "date" | "collection") => {
   return posts.sort((a, b) => {
@@ -41,6 +42,7 @@ export const getPostsWCollection = (posts: Metadata[]) => {
 };
 
 export const components = {
+  AsciinemaPlayer,
   Image,
   Info,
   Link: MyLink,

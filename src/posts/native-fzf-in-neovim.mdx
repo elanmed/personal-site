@@ -89,6 +89,8 @@ vim.api.nvim_open_win(term_bufnr, enter, {
 vim.fn.jobstart("fd", { term = true, })
 ```
 
+<AsciinemaPlayer src="/blog/native-fzf-in-neovim/fd-win.cast" rows={31} cols={148} />
+
 Looks good! Now that we can run a `fd` command in a terminal buffer, how can we start fuzzy
 filtering the output with `fzf`?
 
@@ -106,9 +108,12 @@ vim.fn.jobstart("fd | fzf", {
 vim.cmd "startinsert"
 ```
 
+<AsciinemaPlayer src="/blog/native-fzf-in-neovim/fd-fzf.cast" rows={31} cols={148} />
+
 By default, opening a terminal buffer puts us in normal mode where we can navigate the terminal like
-its any other buffer. In our case though, we want to interact with the `fzf` process in insert
-mode - `:startinsert` gets us there.
+its any other buffer. In our case though, we want to interact with the `fzf` process in insert mode
+
+- `:startinsert` gets us there.
 
 We also added the `on_exit` callback, which does what it sounds like. Currently, we're using the
 callback to close the window when the `fzf` process exits - i.e. when selecting an item. But how do
@@ -165,6 +170,8 @@ vim.fn.jobstart(cmd, {
 })
 vim.cmd "startinsert"
 ```
+
+<AsciinemaPlayer src="/blog/native-fzf-in-neovim/fd-fzf-opts.cast" rows={31} cols={148} />
 
 This right here is the core of our functionality. Let's make it a bit nicer:
 
@@ -282,6 +289,8 @@ end
 
 `fzf` even adds a little loading spinner as the results stream in.
 
+<AsciinemaPlayer src="/blog/native-fzf-in-neovim/lua-source-sleep.cast" rows={31} cols={148} />
+
 ---
 
 Back to our goal of populating `fzf` with the current global marks. In order for the headless `nvim`
@@ -359,6 +368,8 @@ flags as well: `--delimiter='|'` and `--preview` to use `{2}` instead of `{1}`. 
 set, `fzf` will split a result by the passed delimiter, meaning `{2}` - the arg passed to `bat` -
 will be the filename.
 
+<AsciinemaPlayer src="/blog/native-fzf-in-neovim/get-marks-source.cast" rows={31} cols={148} />
+
 We can use a similar RPC approach for `fzf` actions as well, such as a keybinding to delete a mark:
 
 ```lua
@@ -406,6 +417,8 @@ fzf {
   end,
 }
 ```
+
+<AsciinemaPlayer src="/blog/native-fzf-in-neovim/delete-mark-source.cast" rows={31} cols={148} />
 
 ## Conclusion
 

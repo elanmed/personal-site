@@ -1,9 +1,8 @@
 interface AsciinemaPlayerOptions {
-  cols?: number;
-  rows?: number;
+  cols: number;
+  rows: number;
   autoPlay?: boolean;
   loop?: boolean;
-  idleTimeLimit?: number;
 }
 
 interface AsciinemaPlayer {

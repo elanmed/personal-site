@@ -9,7 +9,6 @@ export function AsciinemaPlayer({
   src,
   autoPlay = true,
   loop = false,
-  idleTimeLimit = 2,
   rows,
   cols,
 }: AsciinemaPlayerProps) {
@@ -30,7 +29,6 @@ export function AsciinemaPlayer({
         loop,
         rows,
         cols,
-        idleTimeLimit,
       });
     }
 
@@ -39,7 +37,7 @@ export function AsciinemaPlayer({
         instance?.dispose();
       }
     };
-  }, [src, player, autoPlay, loop, rows, cols, idleTimeLimit]);
+  }, [src, player, autoPlay, loop, rows, cols]);
 
-  return <div ref={ref} />;
+  return <div ref={ref} className="my-6" />;
 }
