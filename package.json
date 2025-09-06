@@ -29,6 +29,7 @@
     "@tanstack/react-query-devtools": "^5.66.11",
     "@types/prismjs": "^1.26.0",
     "@wordpress/wordcount": "^3.20.0",
+    "asciinema-player": "^3.10.0",
     "atropos": "^1.0.2",
     "clsx": "^2.1.1",
     "cookie": "^0.6.0",
