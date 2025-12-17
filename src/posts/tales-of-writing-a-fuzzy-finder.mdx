@@ -1,0 +1,241 @@
+---
+title: "Tales of writing a fuzzy finder"
+abstract: "Caching, batching, and capping to reach instant-feeling search speeds"
+lastUpdated: "Dec 17, 2027"
+slug: tales-of-writing-a-fuzzy-finder
+tags:
+  - software eng
+  - vim
+collection: null
+isPublished: true
+---
+
+# Tales of writing a fuzzy finder
+
+About a half a year or-so ago, I started down the rabbit hole of building frecency-based fuzzy
+finders. At the time, I was using [fzf-lua](https://github.com/ibhagwan/fzf-lua/) as my primary
+picker, and I was interested in modifying `fzf`'s rankings to use frecency scores (i.e. how
+frequently and recently a file has been opened).
+
+I started by using the `fzf-lua`'s `fzf_exec` function to shell out to
+[`fre`](https://github.com/camdencheek/fre), a command-line frecency tracker. But I try to eliminate
+external dependencies when I can, and so I began writing my own lua implementation of the
+[algorithm](https://github.com/camdencheek/fre) used internally by `fre`. The result was
+[`fzf-lua-frecency`](https://github.com/elanmed/fzf-lua-frecency.nvim) - a plugin for `fzf-lua`.
+
+The plugin's frecency logic worked as follows (modified from the README):
+
+- When opened, files are given a score of `1`. This score decays exponentially over time with a
+  half-life of 30 days - i.e. a score of `1` will decay to `0.5` in 30 days.
+- Scores are not stored directly. Instead, an `mpack`-encoded file keeps track of the
+  `date_at_score_one` for each file, which represents the time at which the file's score will decay
+  to `1`. Using the `date_at_score_one`, current time, and decay-rate, we can derive a file's
+  current score.
+
+However, there's a crucial trade-off I specify in the README:
+
+> By default, `fzf` will filter out results based on the current input and sort the results to
+> display the most relevant items first. With the `--no-sort` option enabled, `fzf` will continue to
+> filter out results based on the current input, but it will _not_ sort the list of results itself
+> as you type. `fzf-lua-frecency` defaults `--no-sort` to `true` since the list provided to `fzf` is
+> already sorted: frecent files first (in order), everything else after. As a result, with
+> `--no-sort` enabled, frecent items will always rank first in the list of results - even if another
+> entry has a better fuzzy score based on the current input.
+
+Given a user input, `fzf-lua-frecency` would eliminate entries based on the user input, but it
+wouldn't _sort_ them. I wanted a fuzzy finder that would sort (and eliminate) entries based on it's
+fuzzy score (dependent on the current input) and it's frecency score (independent of the current
+input). I essentially wanted to build my own scoring algorithm, and to do that, I'd need to build my
+own fuzzy finder.
+
+## First attempt
+
+At a high level, what I had in mind was that, for a given input, the fuzzy finder would:
+
+- Pull the files in the `cwd`
+- Calculate a file's "fuzzy" score against that input
+- Calculate a file's frecency score
+- Calculate a file's misc score (i.e. is the file open, is it modified, etc)
+- Scale the values to the same min-max range
+- Weigh each score by some multiple and add them together i.e.
+  `0.7 * fuzzy + 0.3 * (frecency + misc)`
+- Sort the files based on their total score
+- Render the files in their sorted order with filetype icons
+
+Coming off the heels of `fzf-lua-frecency`, I initially wanted to build my fuzzy finder using `fzf`
+as well. Using the `--disabled` flag, `fzf` can become a standalone file picker with no filtering or
+sorting of it's own - which was ideal, since I wanted to do that myself. `junegunn` has a great
+[walkthrough](https://junegunn.github.io/fzf/tips/ripgrep-integration/) that uses `fzf` as a picker
+for results supplied by `rg`. In my case, I would replace `rg` with
+`nvim --headless -l [path-to-lua-script]`. To render the `fzf` picker UI within Neovim, I used the
+approach outlined in my last [post](/blog/native-fzf-in-neovim) where I open a terminal buffer which
+runs the `fzf` command.
+
+As a proof of concept it worked, but boy was it slow. I needed caching, and to cache, I needed to
+persist state between keystrokes, and to persist state between keystrokes, I needed to move past
+`fzf` and build my own picker.
+
+## A basic picker UI
+
+Building a basic picker UI turned out to be fairly straightforward, which I think is a testiment to
+Neovim's API design and overall hack-ability. At a high level, my barebones picker:
+
+- Creates two buffers: one for the user input, one for the results
+  - `:h nvim_create_buf`
+- Opens two windows, setting the input window to a height of `1`
+  - `:h nvim_open_win`
+  - `:h nvim_win_set_height`
+- Creates an autocommand to close both windows when closing either
+  - `:h nvim_create_autocmd`
+  - `:h nvim_win_is_valid`
+  - `:h nvim_win_close`
+- Populates the results buffer based on the current user input
+  - `:h TextChanged`
+  - `:h TextChangedI`
+  - `:h nvim_buf_get_lines`
+  - `:h nvim_buf_set_lines`
+- Sets insert mode keymaps for the input buffer that perform some action in the context of the
+  results buffer
+  - `:h vim.keymap.set`
+  - `:h nvim_win_call`
+
+Using this approach, I was able to write a barebonesp picker in ~50 LOC.
+
+## Caching
+
+Now that I had a picker that could persist state between keystrokes - remember, the `fzf` approach
+would load a lua script from scratch on each keystroke - I could focus on improving performance
+through caching.
+
+Referencing the psuedocode from earlier, here's how I thought about improving the performance for
+each step:
+
+1. Pull the files in the `cwd`
+   - _Can be cached per vim session, or at least once per `cwd`_
+2. Calculate a file's "fuzzy" score against that input
+   - _Can't be cached_
+3. Calculate a file's frecency score
+   - _Can't be cached_
+4. Calculate a file's misc score (i.e. is the file open, is it modified, etc)
+   - _The list of open buffers can be cached per picker invocation - i.e. when opening the picker,
+     not on every keystroke_
+5. Scale both values to the same min-max range
+   - _Can't be cached_
+6. Weigh each score by some multiple and add them together i.e.
+   `0.7 * fuzzy + 0.3 * (frecency + misc)`
+   - _Can't be cached_
+7. Sort the files based on their total score
+   - _Can't be cached_
+8. Render the files in their sorted order with filetype icons
+   - _Icons can be cached, if necessary_
+
+These caching optimizations helped, but the picker still _felt_ slow - the UI was blocked as the
+results were calculated, which would prevent the latest keystrokes from rendering in the input
+buffer.
+
+## Batching to yield to the main thread
+
+To avoid blocking the UI from updating as picker results were processed, I began to process the
+entries in small batches, yielding to the main thread after each batch. In other words, before
+batching, the flow looked like:
+
+- User types `ab`
+- The Neovim UI renders `a`
+- Results for `a` are processed - slow!
+- Results for `a` are rendered
+- The Neovim UI renders `ab`
+- Results for `ab` are processed
+- Results for `ab` are rendered
+
+After batching:
+
+- User types `ab`
+- The Neovim UI renders `a`
+- Batch #1 of the results for `a` is processed - fast!
+- The fuzzy finder yields back to the main thread
+- The Neovim UI renders `ab`
+- Batch #2 of the results for `a` is processed
+- ...
+- Results for `a` are rendered
+- Batch #1 of the results for `ab` is processed
+- Batch #2 of the results for `ab` is processed
+- ...
+- Results for `ab` are rendered
+
+Yielding to the main thread is simple: simply finish the current function and schedule the next
+batch with `vim.schedule`. A simple batching function can look like:
+
+```lua
+local batch_size = 2
+
+local step
+--- @generic T
+--- @param list T[]
+--- @param on_iter fun(entry: T):nil
+--- @param on_complete fun():nil
+step = function(list, on_iter, on_complete, start)
+  vim.print('step')
+  start = start or 1
+  for i = start, math.min(#list, start + batch_size - 1) do
+    on_iter(list[i])
+  end
+  start = start + batch_size
+  if start > #list then
+    on_complete()
+  else
+    vim.schedule(function() step(list, on_iter, on_complete, start) end)
+  end
+end
+
+step({ 1, 2, 3, 4, 5 }, function(entry) vim.print(entry) end, function() vim.print "completed" end)
+
+-- step
+-- 1
+-- 2
+-- step
+-- 3
+-- 4
+-- step
+-- 5
+-- completed
+```
+
+I go into more detail in this post about improving the ergonomics of batching functions.
+
+## An unexpected bottleneck
+
+With caching and batching in place, average processing times were significantly down. However, I
+began to notice an interesting pattern when inpecting the logs: processing a short input would take
+significantly longer than for a lengthier input. I found this surprising, since the fuzzy algorithm
+should need to compare the input to every file regardless of the input's length.
+
+After asking Claude to ingest `matchfuzzypos`'s source code (I'm not too comfortable reading C), it
+confirmed that the algorithm is in fact much quicker to filter out results that _don't_ have a fuzzy
+match at all than it is calculating the score and indecies for results which _do_ have a fuzzy
+match. For the short inputs, nearly every file would have a fuzzy match against the user input -
+that's just the nature of fuzzy matching. For lenghtier inputs, very few files would have a fuzzy
+match against the user input, which allows the algorithm to speed along to the files that do have a
+match. So, how to speed up processing shorter inputs?
+
+The solution I came up with is simple yet effective: I cap the number of files that are fuzzy
+matched to a fixed constant. Once `n` files are found with a fuzzy match, I skip the remaining files
+and move onto the sorting and rendering.
+
+Although this heuristic has the potential to miss processing the target file, I've found this isn't
+the case in practice. For short inputs, it's unlikely that the target file will have a fuzzy score
+that would rank higher than it's haystack neighbors - it's hard to pinpoint a file with a short user
+input based on fuzzy matching alone. That's where frecency scores come into play: a file with a high
+frecency score _can_ rank higher than its non-frecenct neighbors even with a very short user input.
+To ensure that frecenct files are considered even with the capping heuristic in place, I simply
+calculate fuzzy scores for files with an existing frecency score before calculating scores for
+non-frecent files.
+
+This solution worked: processing shorter inputs was down to the same speed as lenghtier inputs, and
+I was ready to call it a day.
+
+## Conclusion
+
+With all the optimizations in place, I average ~20ms on a codebase of 60k files on my local
+machine - a speed which effectively feels instant. It a took a while to get there, but the results
+are worth it. I use this fuzzy finder on the daily, and it's stable and fast and - most
+importantly - something I wrote myself. Thanks for reading.
