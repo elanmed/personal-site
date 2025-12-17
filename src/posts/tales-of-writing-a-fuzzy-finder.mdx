@@ -77,7 +77,7 @@ persist state between keystrokes, and to persist state between keystrokes, I nee
 
 ## A basic picker UI
 
-Building a basic picker UI turned out to be fairly straightforward, which I think is a testiment to
+Building a basic picker UI turned out to be fairly straightforward, which I think is a testament to
 Neovim's API design and overall hack-ability. At a high level, my barebones picker:
 
 - Creates two buffers: one for the user input, one for the results
@@ -99,7 +99,7 @@ Neovim's API design and overall hack-ability. At a high level, my barebones pick
   - `:h vim.keymap.set`
   - `:h nvim_win_call`
 
-Using this approach, I was able to write a barebonesp picker in ~50 LOC.
+Using this approach, I was able to write a barebones picker in ~50 LOC.
 
 ## Caching
 
@@ -107,7 +107,7 @@ Now that I had a picker that could persist state between keystrokes - remember, 
 would load a lua script from scratch on each keystroke - I could focus on improving performance
 through caching.
 
-Referencing the psuedocode from earlier, here's how I thought about improving the performance for
+Referencing the pseudocode from earlier, here's how I thought about improving the performance for
 each step:
 
 1. Pull the files in the `cwd`
@@ -205,17 +205,17 @@ I go into more detail in this post about improving the ergonomics of batching fu
 ## An unexpected bottleneck
 
 With caching and batching in place, average processing times were significantly down. However, I
-began to notice an interesting pattern when inpecting the logs: processing a short input would take
+began to notice an interesting pattern when inspecting the logs: processing a short input would take
 significantly longer than for a lengthier input. I found this surprising, since the fuzzy algorithm
 should need to compare the input to every file regardless of the input's length.
 
 After asking Claude to ingest `matchfuzzypos`'s source code (I'm not too comfortable reading C), it
 confirmed that the algorithm is in fact much quicker to filter out results that _don't_ have a fuzzy
-match at all than it is calculating the score and indecies for results which _do_ have a fuzzy
-match. For the short inputs, nearly every file would have a fuzzy match against the user input -
-that's just the nature of fuzzy matching. For lenghtier inputs, very few files would have a fuzzy
-match against the user input, which allows the algorithm to speed along to the files that do have a
-match. So, how to speed up processing shorter inputs?
+match at all than it is calculating the score and indices for results which _do_ have a fuzzy match.
+For the short inputs, nearly every file would have a fuzzy match against the user input - that's
+just the nature of fuzzy matching. For lengthier inputs, very few files would have a fuzzy match
+against the user input, which allows the algorithm to speed along to the files that do have a match.
+So, how to speed up processing shorter inputs?
 
 The solution I came up with is simple yet effective: I cap the number of files that are fuzzy
 matched to a fixed constant. Once `n` files are found with a fuzzy match, I skip the remaining files
@@ -230,7 +230,7 @@ To ensure that frecenct files are considered even with the capping heuristic in 
 calculate fuzzy scores for files with an existing frecency score before calculating scores for
 non-frecent files.
 
-This solution worked: processing shorter inputs was down to the same speed as lenghtier inputs, and
+This solution worked: processing shorter inputs was down to the same speed as lengthier inputs, and
 I was ready to call it a day.
 
 ## Conclusion
