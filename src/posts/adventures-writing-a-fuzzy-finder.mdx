@@ -56,7 +56,7 @@ own.
 
 ## First attempt
 
-At a high level, I had in mind that that the fuzzy finder would, for a given input:
+At a high level, my plan was that the fuzzy finder would, for a given input:
 
 - Pull the files in the `cwd`
 - Calculate a file's "fuzzy" score against that input
@@ -108,7 +108,7 @@ Neovim's API design and overall hackability. At a high level, my barebones picke
   - `:h vim.keymap.set`
   - `:h nvim_win_call`
 
-Using this approach, I was able to write a basic picker in ~50 LOC.
+Using this approach, I was able to write a basic picker in ~50 lines of code.
 
 ## Caching
 
@@ -119,12 +119,12 @@ of saying how long it can be cached.
 
 1. Data that's fresh for an entire vim session
 2. Data that's fresh for an entire picker session
-3. Data that's fresh for a single keystroke
+3. Data that's only fresh for a single keystroke
 
 Referencing the pseudocode from earlier, here's how I thought about caching for each step:
 
 1. Pull the files in the `cwd`
-   - _Can be cached for the entire vim session, or at least once per `cwd`_
+   - _Can be cached for the entire vim session, or at least once per `cwd` change_
 2. Calculate a file's "fuzzy" score against that input
    - _Can't be cached, depends on the keystroke_
 3. Calculate a file's existing frecency score
@@ -223,7 +223,8 @@ With caching and batching in place, average processing times were significantly 
 began to notice an interesting pattern when inspecting the logs I set up: processing would take
 significantly longer for a short input than for a lengthier input. I found this surprising, since
 the fuzzy algorithm should need to compare the input to every file regardless of the input's length.
-Moreover, with a shorter input there's fewer letters to take into account during these operations!
+Moreover, with a shorter input there's fewer letters to take into account during these operations -
+it should be faster, not slower.
 
 I investigated further by having Claude ingest `matchfuzzypos`'s source code (I'm not too
 comfortable reading C), which found that the algorithm is much quicker to filter out results that
@@ -238,16 +239,16 @@ The solution I came up with is simple yet effective: I cap the number of files t
 matched to a fixed constant. Once `n` files are found to have a fuzzy match, I skip the remaining
 files and move onto the sorting and rendering.
 
-Although this heuristic has the potential to miss processing the "target" file (the file the user is
-searching for), I've found this isn't the case in practice. For short inputs, it's unlikely that the
-needle will have a fuzzy score that would rank higher than it's haystack neighbors - it's hard to
-locate a file with a short user input based on fuzzy matching alone.
+Although this heuristic has the potential to miss processing the "target" file (the file that the
+user is searching for), I've found this isn't the case in practice. For short inputs, it's unlikely
+that the needle will have a fuzzy score that would rank higher than it's haystack neighbors - it's
+hard to locate a file with a short user input based on fuzzy matching alone.
 
 That's where frecency scores come into play: a file with a high frecency score can very well rank
 higher than its non-frecenct neighbors - even with a very short user input - if its been opened
-frequently and recently. So to ensure that frecenct files are considered even with the capping
-heuristic in place, I simply calculate fuzzy scores for files with an existing frecency score before
-calculating scores for non-frecent files.
+frequently and recently enough. So to ensure that frecenct files are considered even with the
+capping heuristic in place, I simply calculate fuzzy scores for files with an existing frecency
+score before calculating scores for non-frecent files.
 
 This solution worked great: benchmarks for shorter inputs were down to the same speed as lengthier
 inputs, and I was ready to call it a day.
@@ -255,6 +256,6 @@ inputs, and I was ready to call it a day.
 ## Conclusion
 
 With all the optimizations in place, I average ~20ms on a codebase of 60k files on my local
-machine - a speed which effectively feels instant. It a took a bit to get there, but the results are
-worth it. I use this fuzzy finder on the daily, and it's stable and fast and - most importantly -
+machine - a speed which feels pretty great. It a took a bit to get there, but the results are worth
+it. I use this fuzzy finder on the daily, and it's stable and fast and - most importantly -
 something I wrote myself. Thanks for reading.
