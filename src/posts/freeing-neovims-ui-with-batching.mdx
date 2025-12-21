@@ -216,9 +216,186 @@ end
 
 Our `iterator_batcher` looks solid, but Javascript developers will recognize the potential for
 callback-hell: nesting another `iterator_batcher` within an `on_complete` can lead to some very
-nested and messy code very quickly. How can we avoid an `on_complete` callback while still
-maintaining our batching logic? Coroutines!
+nested and messy code very quickly. How can we "await" batching to avoid an `on_complete` callback?
+Coroutines!
 
-## A class-based approach
+The core of this approach uses three functions: `async`, `await`, and a `promise` - I work in web
+development, so this is the pattern I'm most comfortable with.
 
-I'm personally a fan of the builder pattern, so I prefer to use a class-based iterator
+The `promise` will be a function that performs the async action and accepts a `resolve` argument:
+
+Let's start with a classic timer example:
+
+```lua
+local function main()
+  vim.print "start"
+  vim.fn.timer_start(2000, function()
+    vim.print "timer callback"
+  end)
+  vim.print "end"
+end
+main()
+
+-- start
+-- end
+-- timer callback
+```
+
+How can we promisify this so that the order becomes `start` -> `timer callback` -> `end`. In
+javascript, we would create a promise that resolves in the callback - let's follow the same pattern.
+
+```lua
+local function promise(resolve)
+  vim.fn.timer_start(2000, resolve)
+end
+
+local function main()
+  vim.print "start"
+  await promise -- how can we mimic this syntax?
+  vim.print "timer callback"
+  vim.print "end"
+end
+main()
+```
+
+I often find it helpful to go in reverse order: start with the interface I'd like to work with and
+then figure out how to build it. So, how can we mimic an `await`? This next section is a bit of a
+jump, but bear with me:
+
+```lua
+--- @param promise fun(resolve: fun():nil):nil
+local await = function(promise)
+  local thread = coroutine.running()
+  assert(thread ~= nil, "`await` can only be called in a coroutine")
+  local scheduled_promise = vim.schedule_wrap(promise)
+  scheduled_promise(function() coroutine.resume(thread) end)
+  coroutine.yield()
+end
+```
+
+`await` is going to be a function which takes in our promise. The promise is going to be called
+_with_ `resolve` immediately, but the promise will only call the resolve function _itself_ when the
+async task is finished. This is where the coroutine magic comes into play: because we're wrapping
+the `promise` function call in a `schedule_wrap`, it will only be _scheduled_ to run when
+`scheduled_promise` is called - `coroutine.yield()` will be called before `scheduled_promise` is.
+`coroutine.yield()` pauses execution until the next `coroutine.resume` - which is our `resolve`
+function that's called when the async task completes!
+
+That gives us this code in `main`:
+
+```lua
+local function promise(resolve)
+  vim.fn.timer_start(2000, resolve)
+end
+
+local function main()
+  vim.print "start"
+  await(promise)
+  vim.print "timer callback"
+  vim.print "end"
+end
+main()
+```
+
+But one last part: our `await` assumes that it's called in the context of a coroutine - but we have
+no coroutine in `main`. A one-off approach would be to replace `main()` with:
+
+```lua
+coroutine.resume(coroutine.create(main))
+```
+
+But this has a big drawback: errors thrown in `main` are silently swallowed! This is where `async`
+comes into play:
+
+```lua
+--- @param fn fun():nil
+local async = function(fn)
+  return function(...)
+    local ok, err = coroutine.resume(coroutine.create(fn), ...)
+    if not ok then error(err) end
+  end
+end
+```
+
+Updating `main`, that gives us:
+
+```lua
+local function promise(resolve)
+  vim.fn.timer_start(2000, resolve)
+end
+
+local main = async(function()
+  vim.print "start"
+  await(promise)
+  vim.print "timer callback"
+  vim.print "end"
+end)
+main()
+```
+
+## Bonus: A class-based approach
+
+I'm personally a fan of the builder pattern, so I prefer to use a class-based batcher function like
+the following:
+
+```lua
+local Batch = {}
+Batch.__index = Batch
+
+--- @generic IterState, IterVar
+--- @param iter_factory fun(): ((fun(invariant_state: IterState, control_var: IterVar):IterVar), IterState, IterVar)
+function Batch:new(iter_factory)
+  local this = {
+    _iter_factory = iter_factory,
+    _size = math.huge,
+  }
+
+  setmetatable(this, Batch)
+  return this
+end
+
+--- @param size number
+function Batch:size(size)
+  self._size = size
+  return self
+end
+
+--- @generic T
+--- @param on_iteration fun(entry: T):nil
+--- @param on_complete fun():nil
+function Batch:each(on_iteration, on_complete)
+  local iter_fn, invariant_state, control_var = self._iter_factory()
+  local step
+  step = function()
+    local num_processed = 0
+    while num_processed < self._size do
+      local values = { iter_fn(invariant_state, control_var), }
+      control_var = values[1]
+
+      if control_var == nil then
+        on_complete()
+        return
+      end
+
+      on_iteration(unpack(values))
+      num_processed = num_processed + 1
+    end
+    vim.schedule(step)
+  end
+  step()
+end
+
+local main = async(function()
+  local promise = function(resolve)
+    Batch
+        :new(function() return ipairs(list) end)
+        :size(2)
+        :each(
+          function(entry) print(entry) end,
+          resolve
+        )
+  end
+  await(promise)
+end)
+main()
+```
