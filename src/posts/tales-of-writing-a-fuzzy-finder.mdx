@@ -12,10 +12,10 @@ isPublished: true
 
 # Tales of writing a fuzzy finder
 
-About a half a year or-so ago, I started down the rabbit hole of building frecency-based fuzzy
-finders. At the time, I was using [fzf-lua](https://github.com/ibhagwan/fzf-lua/) as my primary
-picker, and I was interested in modifying `fzf`'s rankings to use frecency scores (i.e. how
-frequently and recently a file has been opened).
+About a half a year ago, I started down a rabbit hole of building frecency-based fuzzy finders. At
+the time, I was using [fzf-lua](https://github.com/ibhagwan/fzf-lua/) as my primary picker, and I
+was interested in modifying `fzf`'s rankings to use frecency scores (i.e. how frequently and
+recently a file has been opened).
 
 I started by using the `fzf-lua`'s `fzf_exec` function to shell out to
 [`fre`](https://github.com/camdencheek/fre), a command-line frecency tracker. But I try to eliminate
@@ -32,7 +32,7 @@ The plugin's frecency logic worked as follows (modified from the README):
   to `1`. Using the `date_at_score_one`, current time, and decay-rate, we can derive a file's
   current score.
 
-However, there's a crucial trade-off I specify in the README:
+However, there's an important trade-off I specify in the README:
 
 > By default, `fzf` will filter out results based on the current input and sort the results to
 > display the most relevant items first. With the `--no-sort` option enabled, `fzf` will continue to
@@ -42,11 +42,16 @@ However, there's a crucial trade-off I specify in the README:
 > `--no-sort` enabled, frecent items will always rank first in the list of results - even if another
 > entry has a better fuzzy score based on the current input.
 
-Given a user input, `fzf-lua-frecency` would eliminate entries based on the user input, but it
-wouldn't _sort_ them. I wanted a fuzzy finder that would sort (and eliminate) entries based on it's
-fuzzy score (dependent on the current input) and it's frecency score (independent of the current
-input). I essentially wanted to build my own scoring algorithm, and to do that, I'd need to build my
-own fuzzy finder.
+Given a user input, `fzf-lua-frecency` would eliminate entries based on its fuzzy score and sort
+entries based on its frecency score. That worked, but what I really wanted was a fuzzy finder that
+would sort/eliminate entries based on a ranking comprised of _both_ it's fuzzy and frecency score.
+The difference may sound subtle, but the user experience is drastically different. For the former,
+the order of the search results never changes - entries are only eliminated - but for the latter,
+every keystroke can reorder the files completely.
+
+Although others have written similar plugins already (i.e.
+[`smart-open.nvim`](https://github.com/danielfalk/smart-open.nvim)), I was interested in buildling
+my own.
 
 ## First attempt
 
@@ -71,9 +76,12 @@ for results supplied by `rg`. In my case, I would replace `rg` with
 approach outlined in my last [post](/blog/native-fzf-in-neovim) where I open a terminal buffer which
 runs the `fzf` command.
 
-As a proof of concept it worked, but boy was it slow. I needed caching, and to cache, I needed to
-persist state between keystrokes, and to persist state between keystrokes, I needed to move past
-`fzf` and build my own picker.
+As a proof of concept it worked, but boy was it slow. The core issue was that every keystroke
+executed a standalone lua script which fed the search results to `fzf` through `stdout`. But since
+every script invokation was independent, there was no easy way to pass state _between_ different
+script calls - which meant there was no easy way to cache data from one keystroke to another. If I
+wanted my fuzzy finder to be performant, I needed caching, and to cache, I needed to move past `fzf`
+and build my own picker.
 
 ## A basic picker UI
 
@@ -89,7 +97,7 @@ Neovim's API design and overall hack-ability. At a high level, my barebones pick
   - `:h nvim_create_autocmd`
   - `:h nvim_win_is_valid`
   - `:h nvim_win_close`
-- Populates the results buffer based on the current user input
+- Populates the results buffer based on the current value of the input buffer
   - `:h TextChanged`
   - `:h TextChangedI`
   - `:h nvim_buf_get_lines`
@@ -103,9 +111,13 @@ Using this approach, I was able to write a barebones picker in ~50 LOC.
 
 ## Caching
 
-Now that I had a picker that could persist state between keystrokes - remember, the `fzf` approach
-would load a lua script from scratch on each keystroke - I could focus on improving performance
-through caching.
+Now that I had a picker that could persist state between keystrokes, I could begin caching.
+
+In my mind, there were three categories for when data would be fresh.
+
+1. Data that's fresh for an entire vim session
+2. Data that's fresh for an entire picker session
+3. Data that's fresh for a single keystroke
 
 Referencing the pseudocode from earlier, here's how I thought about improving the performance for
 each step:
@@ -113,21 +125,20 @@ each step:
 1. Pull the files in the `cwd`
    - _Can be cached per vim session, or at least once per `cwd`_
 2. Calculate a file's "fuzzy" score against that input
-   - _Can't be cached_
+   - _Can't be cached, depends on the keystroke_
 3. Calculate a file's frecency score
-   - _Can't be cached_
+   - _Can't be cached, depends on the keystroke_
 4. Calculate a file's misc score (i.e. is the file open, is it modified, etc)
-   - _The list of open buffers can be cached per picker invocation - i.e. when opening the picker,
-     not on every keystroke_
+   - _The list of open buffers can be cached per picker session_
 5. Scale both values to the same min-max range
-   - _Can't be cached_
+   - _Can't be cached, depends on a score which depends on the keystroke_
 6. Weigh each score by some multiple and add them together i.e.
    `0.7 * fuzzy + 0.3 * (frecency + misc)`
-   - _Can't be cached_
+   - _Can't be cached, depends on a score which depends on the keystroke_
 7. Sort the files based on their total score
-   - _Can't be cached_
+   - _Can't be cached, depends on the keystroke_
 8. Render the files in their sorted order with filetype icons
-   - _Icons can be cached, if necessary_
+   - _Icons can be cached per picker session_
 
 These caching optimizations helped, but the picker still _felt_ slow - the UI was blocked as the
 results were calculated, which would prevent the latest keystrokes from rendering in the input
@@ -162,8 +173,8 @@ After batching:
 - ...
 - Results for `ab` are rendered
 
-Yielding to the main thread is simple: simply finish the current function and schedule the next
-batch with `vim.schedule`. A simple batching function can look like:
+Yielding to the main thread sounds complex but is actually quite simple: finish the current function
+and schedule the next batch with `vim.schedule`. A simple batching function can look like:
 
 ```lua
 local batch_size = 2
@@ -200,16 +211,16 @@ step({ 1, 2, 3, 4, 5 }, function(entry) vim.print(entry) end, function() vim.pri
 -- completed
 ```
 
-I go into more detail in this post about improving the ergonomics of batching functions.
+I go into more detail in this [post](/TODO) about improving the ergonomics of batching functions.
 
 ## An unexpected bottleneck
 
 With caching and batching in place, average processing times were significantly down. However, I
-began to notice an interesting pattern when inspecting the logs: processing a short input would take
-significantly longer than for a lengthier input. I found this surprising, since the fuzzy algorithm
-should need to compare the input to every file regardless of the input's length.
+began to notice an interesting pattern when inspecting the logs I set up: processing a short input
+would take significantly longer than for a lengthier input. I found this surprising, since the fuzzy
+algorithm should need to compare the input to every file regardless of the input's length.
 
-After asking Claude to ingest `matchfuzzypos`'s source code (I'm not too comfortable reading C), it
+After having Claude ingest `matchfuzzypos`'s source code (I'm not too comfortable reading C), it
 confirmed that the algorithm is in fact much quicker to filter out results that _don't_ have a fuzzy
 match at all than it is calculating the score and indices for results which _do_ have a fuzzy match.
 For the short inputs, nearly every file would have a fuzzy match against the user input - that's
