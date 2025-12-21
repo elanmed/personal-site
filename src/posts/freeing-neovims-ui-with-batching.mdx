@@ -1,0 +1,145 @@
+---
+title: "Freeing Neovim's UI with batching"
+abstract: "Template abstract"
+lastUpdated: "December 21, 2025"
+slug: freeing-neovims-ui-with-batching
+tags:
+  - software eng
+  - vim
+collection: null
+isPublished: false
+---
+
+When building a process-intensive Neovim plugin, one of the first things you'll encounter is UI
+freezes. It's frustrating, but it makes sense - Neovim can't update the UI with the latest typed
+keystrokes while
+
+## Boilerplate
+
+To start, let's set up some boilerplate to experience with UI freezes first hand:
+
+```lua
+local enter_win = true
+local listed_buf = false
+local scratch_buf = true
+local strict_indexing = false
+
+local results_bufnr = vim.api.nvim_create_buf(listed_buf, scratch_buf)
+local results_winnr = vim.api.nvim_open_win(results_bufnr, not enter_win, {
+  split = "right",
+  win = 0,
+})
+
+local input_bufnr = vim.api.nvim_create_buf(listed_buf, scratch_buf)
+local input_winnr = vim.api.nvim_open_win(input_bufnr, enter_win, {
+  split = "above",
+  win = results_winnr,
+})
+
+vim.api.nvim_win_set_height(input_winnr, 1)
+
+vim.api.nvim_create_autocmd("WinClosed", {
+  pattern = { tostring(input_winnr), tostring(results_winnr), },
+  callback = function()
+    local force_close = true
+    if vim.api.nvim_win_is_valid(input_winnr) then vim.api.nvim_win_close(input_winnr, force_close) end
+    if vim.api.nvim_win_is_valid(results_winnr) then vim.api.nvim_win_close(results_winnr, force_close) end
+  end,
+})
+
+--- @param input string
+local function populate_results(input)
+  -- TODO
+end
+
+vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", }, {
+  buffer = input_bufnr,
+  callback = function()
+    local input = vim.api.nvim_buf_get_lines(input_bufnr, 0, 1, strict_indexing)
+    populate_results(input[1] or "")
+  end,
+})
+```
+
+This code creates an input buffer, results buffer, windows for each, and sets up two autocommands.
+The first is just for convenience: when closing either the input or results window, the other is
+closed as well. The second is more relevant: when the input buffer changes, a `populate_results`
+function will run.
+
+Let's start by creating a large table (think the results from `fd`) and looping over the table to
+populate the results buffer:
+
+```lua
+local large_tbl = {}
+for i = 1, 100000 do
+  table.insert(large_tbl, i)
+end
+
+-- ...
+
+--- @param input string
+local function populate_results(input)
+  local results = {}
+  for _, entry in ipairs(large_tbl) do
+    table.insert(results, ("%d :: %s"):format(entry, input))
+  end
+
+  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
+end
+```
+
+You'll notice that the UI freezes while typing - the entire loop needs to complete before Neovim can
+yield back to the main thread to update the UI with the latest keystroke. Looping a hundred thousand
+times might seem a bit contrived, but I've run into this scenario several times when processing
+results from commands such as `fd` and `rg`. So, how can we free up the UI?
+
+## Batches
+
+A simple solution is to process the loop with batches, allowing the UI to update between each. A
+simple batcher function could look like the following:
+
+```lua
+--- @class BatcherOpts<T>
+--- @field list T[]
+--- @field on_iteration fun(entry: T):nil
+--- @field on_complete fun():nil
+
+--- @generic T
+--- @param opts BatcherOpts<T>
+local function batcher(opts)
+  local batch_size = 2
+
+  local step
+  --- @param start number
+  step = function(start)
+    for i = start, math.min(#opts.list, start + batch_size - 1) do
+      opts.on_iteration(opts.list[i])
+    end
+    start = start + batch_size
+    if start > #opts.list then
+      opts.on_complete()
+    else
+      vim.schedule(function() step(start) end)
+    end
+  end
+  step(1)
+end
+```
+
+With it's invocation:
+
+```lua
+--- @param input string
+local function populate_results(input)
+  local results = {}
+  batcher {
+    list = large_tbl,
+    on_iteration = function(entry)
+      table.insert(results, ("%d :: %s"):format(entry, input))
+    end,
+    on_complete = function()
+      vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
+    end
+  }
+end
+```
