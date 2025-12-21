@@ -16,7 +16,7 @@ keystrokes while
 
 ## Boilerplate
 
-To start, let's set up some boilerplate to experience with UI freezes first hand:
+To start, let's set up some boilerplate to experience some UI freezing first hand:
 
 ```lua
 local enter_win = true
@@ -99,25 +99,23 @@ A simple solution is to process the loop with batches, allowing the UI to update
 simple batcher function could look like the following:
 
 ```lua
---- @class BatcherOpts<T>
---- @field list T[]
---- @field on_iteration fun(entry: T):nil
---- @field on_complete fun():nil
-
 --- @generic T
---- @param opts BatcherOpts<T>
-local function batcher(opts)
-  local batch_size = 2
+--- @param list T[]
+--- @param on_iteration fun(entry: T):nil
+--- @param on_complete fun():nil
+--- @param batch_size? number
+local function list_batcher(list, on_iteration, on_complete)
+  batch_size = batch_size or 100
 
   local step
   --- @param start number
   step = function(start)
-    for i = start, math.min(#opts.list, start + batch_size - 1) do
-      opts.on_iteration(opts.list[i])
+    for i = start, math.min(#list, start + batch_size - 1) do
+      on_iteration(list[i])
     end
     start = start + batch_size
-    if start > #opts.list then
-      opts.on_complete()
+    if start > #list then
+      on_complete()
     else
       vim.schedule(function() step(start) end)
     end
@@ -132,14 +130,95 @@ With it's invocation:
 --- @param input string
 local function populate_results(input)
   local results = {}
-  batcher {
-    list = large_tbl,
-    on_iteration = function(entry)
+  list_batcher(
+    large_tbl,
+    function(entry)
       table.insert(results, ("%d :: %s"):format(entry, input))
     end,
-    on_complete = function()
+    function()
       vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
     end
-  }
+  )
 end
 ```
+
+This works for looping over tables, but how about traversing other iterators? For example, the
+`vim.fs.dir(path)` returns an iterator over the items in its path argument, and our `batcher`
+wouldn't be able to handle it at all.
+
+## A more generic iterator
+
+A quick crash course on iterators in lua:
+
+- An iterator is a function that returns the next element in a collection on every invocation.
+- Iterators are normaly returned by calling another function: an iterator factory. `ipairs(table)`
+  is an example of an iterator factory
+- Calling the iterator factory returns up to three values:
+  1. The iterator function
+  2. The "invariant state"
+  3. The initial value of the "control variable"
+- The iterator function is called with the invariant state and the control variable
+- If the first value returned by the iterator is `nil`, the iteration should end. Otherwise, the
+  control variable is set to the first value returned by the other, and the iterator is called again
+  with the (static) invariant state and the updated control variable
+
+The names are a bit academic, but I generally think its best to use the nomenclature in the
+documentation rather than make something up myself.
+
+The implementation uses some generics for clarity, but the code itself is still straightforward.
+
+```lua
+--- @generic IterState, IterVar
+--- @param iterator_factory fun(): fun(invariant_state: IterState, control_var: IterVar):IterVar, IterState, IterVar
+--- @param on_iteration fun(entry: IterVar):nil
+--- @param on_complete fun():nil
+--- @param batch_size? number
+local function iterator_batcher(iterator_factory, on_iteration, on_complete)
+  batch_size = batch_size or 100
+
+  local iter_fn, invariant_state, control_var = iterator_factory()
+  local step
+  step = function()
+    local num_processed = 0
+    while num_processed < batch_size do
+      local values = { iter_fn(invariant_state, control_var), }
+      control_var = values[1]
+
+      if control_var == nil then
+        on_complete()
+        return
+      end
+
+      on_iteration(unpack(values))
+      num_processed = num_processed + 1
+    end
+    vim.schedule(step)
+  end
+  step()
+end
+
+--- @param input string
+local function populate_results(input)
+  local results = {}
+  iterator_batcher(
+    function() return ipairs(large_tbl) end,
+    function(entry)
+      table.insert(results, ("%d :: %s"):format(entry, input))
+    end,
+    function()
+      vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
+    end
+  )
+end
+```
+
+## Basic async-await with coroutines
+
+Our `iterator_batcher` looks solid, but Javascript developers will recognize the potential for
+callback-hell: nesting another `iterator_batcher` within an `on_complete` can lead to some very
+nested and messy code very quickly. How can we avoid an `on_complete` callback while still
+maintaining our batching logic? Coroutines!
+
+## A class-based approach
+
+I'm personally a fan of the builder pattern, so I prefer to use a class-based iterator
