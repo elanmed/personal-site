@@ -1,8 +1,8 @@
 ---
-title: "Adventures writing a fuzzy finder"
-abstract: "Caching, batching, and other heuristics I found"
+title: "Lessons in Performance: Caching, Batching, and Fuzzy Matching"
+abstract: "Caching, batching, and other hard-won lessons"
 lastUpdated: "Dec 17, 2027"
-slug: adventures-writing-a-fuzzy-finder
+slug: lessons-in-performance-caching-batching-and-fuzzy-matching
 tags:
   - software eng
   - vim
@@ -10,7 +10,7 @@ collection: null
 isPublished: true
 ---
 
-# Adventures writing a fuzzy finder
+# Lessons in Performance: Caching, Batching, and Fuzzy Matching
 
 About a half a year ago, I started down a rabbit hole of building frecency-based fuzzy finders. At
 the time, I was using [fzf-lua](https://github.com/ibhagwan/fzf-lua/) as my primary picker, and I
@@ -213,8 +213,6 @@ step({ 1, 2, 3, 4, 5 }, function(entry) vim.print(entry) end, function() vim.pri
 -- completed
 ```
 
-<!-- I go into more detail in this [post](/TODO) about improving the ergonomics of batching functions. -->
-
 I'm working on another post about improving the ergonomics of batching functions, stay tuned.
 
 ## An unexpected bottleneck
@@ -256,6 +254,11 @@ inputs, and I was ready to call it a day.
 ## Conclusion
 
 With all the optimizations in place, I average ~20ms on a codebase of 60k files on my local
-machine - a speed which feels pretty great. It a took a bit to get there, but the results are worth
-it. I use this fuzzy finder on the daily, and it's stable and fast and - most importantly -
-something I wrote myself. Thanks for reading.
+machine - a speed which feels pretty great. It took a bit to get there, but the results are worth
+it.
+
+Caching bought back wasted computation, batching kept the UI responsive, and the frecency-first
+heuristic turned the worst case (short inputs) into just another average case. None of these
+optimizations alone would have been enough, but together they transformed an interesting prototype
+into something I reach for on the daily. It's stable, fast, most importantly, something I wrote
+myself. Thanks for reading.

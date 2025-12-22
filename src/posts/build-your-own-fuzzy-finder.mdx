@@ -1,0 +1,327 @@
+---
+title: "Build your own fuzzy finder"
+abstract: "Build your own fuzzy finder"
+lastUpdated: "October 4, 2025"
+slug: build-your-own-fuzzy-finder
+tags:
+  - software eng
+  - vim
+collection: null
+isPublished: true
+---
+
+# Heading one
+
+## Part 1: Creating a picker
+
+To start, we need a basic picker interface where we can type our search query and render the
+results. We could use a pre-existing picker plugin, but in the spirit of this article, I'd prefer to
+write our own:
+
+```lua
+local function fuzzy_find()
+  -- avoid showing in the buffer list
+  local listed = false
+  -- sets buftype=nofile (plus some other options) which prevents writing to the buffer
+  -- also prevents errors when closing the buffer with unaved changes
+  local scratch = true
+  local input_buf = vim.api.nvim_create_buf(listed, scratch)
+  local editor_win_height = vim.api.nvim_win_get_height(0)
+  local width = vim.api.nvim_win_get_width(0)
+
+  local vertical_border_height = 2
+  local enter_input_win = true
+  local input_win = vim.api.nvim_open_win(input_buf, enter_input_win, {
+    style = "minimal",
+    relative = "editor",
+    -- which corner of the window is places at (row,col)
+    anchor = "SW",
+    width = width,
+    height = 1,
+    row = editor_win_height,
+    col = 0,
+    title = "Input",
+    border = "rounded",
+  })
+
+  local results_buf = vim.api.nvim_create_buf(listed, scratch)
+  local enter_results_win = false
+  local results_win = vim.api.nvim_open_win(results_buf, enter_results_win, {
+    style = "minimal",
+    relative = "editor",
+    -- which corner of the window is places at (row,col)
+    anchor = "SW",
+    width = width,
+    height = 20,
+    row = editor_win_height - 1 - vertical_border_height,
+    col = 0,
+    border = "rounded",
+    title = "Results",
+    focusable = false,
+  })
+end
+```
+
+This will open two windows, an input window and a results window, each with it's own buffer. We
+enter the input window immediately, while the results window is marked as unfocusable (I find this
+setup intuitive). To close both windows at the same time, we can add an autocommand that'll close
+the results window when closing the input window.
+
+```lua
+local function fuzzy_find()
+  -- ...
+
+  local group = vim.api.nvim_create_augroup("FuzzyFinder", { clear = true, })
+
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(input_win),
+    group = group,
+    callback = function()
+      local force = true
+      vim.api.nvim_win_close(results_win, force)
+    end,
+  })
+end
+```
+
+Next, we need to populate the results buffer based on the current value of the input buffer. An
+autocommand works great here too.
+
+```lua
+--- @param input string
+local function get_results(input)
+  local results = {}
+  for i = 1, #input do
+    table.insert(results, i .. " " .. input)
+  end
+  return results
+end
+
+local function fuzzy_find()
+  -- ...
+
+  -- TextChanged fires when changes are made in normal mode, TextChangedI for insert mode
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", }, {
+    buffer = input_buf,
+    group = group,
+    callback = function()
+      -- call vim.api.nvim_get_current_line in the context of input_win and return the value
+      local input = vim.api.nvim_win_call(input_win, vim.api.nvim_get_current_line)
+      local results = get_results(input)
+
+      -- :h nvim_buf_set_lines()
+      -- "Out-of-bounds indices are clamped to the nearest valid value, unless `strict_indexing` is set."
+      local strict_indexing = false
+      vim.api.nvim_buf_set_lines(results_buf, 0, -1, strict_indexing, results)
+    end,
+  })
+end
+```
+
+To finish our picker, we need keymaps to navigate and select from the results buffer:
+
+```lua
+local function fuzzy_find()
+  -- ...
+
+  vim.api.nvim_set_option_value("number", true, { win = results_win, })
+  vim.api.nvim_set_option_value("cursorline", true, { win = results_win, })
+
+  vim.keymap.set("i", "<C-n>", function()
+    vim.api.nvim_win_call(results_win, function()
+      vim.cmd "normal! j"
+      -- a non-focused window won't redraw automatically, so we need to force it
+      vim.cmd "redraw"
+    end)
+  end, { buffer = input_buf, })
+
+  vim.keymap.set("i", "<C-p>", function()
+    vim.api.nvim_win_call(results_win, function()
+      vim.cmd "normal! k"
+      vim.cmd "redraw"
+    end)
+  end, { buffer = input_buf, })
+
+  vim.keymap.set("i", "<Cr>", function()
+    local result = vim.api.nvim_win_call(results_win, vim.api.nvim_get_current_line)
+    vim.print("Selected: " .. result)
+  end, { buffer = input_buf, })
+end
+```
+
+Since we'll be typing in the input buffer, we need to scope our remaps to the input buffer as well,
+while performing the actions in the context of the results window. This may seem little strange at
+first, but it works nicely.
+
+## Part 2: A slow an unoptimized fuzzy picker
+
+Now that we have a functioning picker, we can move onto the `get_results()` function to populate the
+results. Our approach will look something like:
+
+- Get all files in the current directory with `fd`. For each file:
+  - Calculate the boosted score:
+    - If the file is in `vim.g.oldfiles`, add `+50`
+    - If the buffer is modified, add a boost, add `+20`
+    - If the file is an open buffer:
+      - If the buffer is the current file, add `-1000` (it's already open, you don't want to open
+        it!)
+      - Else if the buffer is the alternate file, add `+30`
+      - Else add `+10`
+  - Calculate the fuzzy score of the file against the current input
+  - Set the final score as `0.7 * fuzzy_score + 0.3 * boosted_score`
+- Sort the files
+
+We can get a working version in ~90 LOC:
+
+```lua
+--- @class NormalizeFuzzyScoreOpts
+--- @field fuzzy_score number
+--- @field input_len number
+
+--- Scale a fuzzy score from vim.fn.matchfuzzypos to a range of 0-100
+--- @param opts NormalizeFuzzyScoreOpts
+local function normalize_fuzzy_score(opts)
+  if opts.input_len == 0 then return 0 end
+
+  -- very approximate!
+  local perfect_score_per_char = 150
+  local per_char_score = opts.fuzzy_score / opts.input_len
+  local normalized = (per_char_score / perfect_score_per_char) * 100
+  return math.max(0, math.min(100, normalized))
+end
+
+--- @class GetResultsOpts
+--- @field input string
+--- @field curr_bufname string
+--- @field alt_bufname string
+
+--- @param opts GetResultsOpts
+local function get_results(opts)
+  --- @type table<string, true>
+  local oldfiles = {}
+  for _, oldfile in ipairs(vim.v.oldfiles) do
+    oldfiles[oldfile] = true
+  end
+
+  local open_buffers_to_modified = {}
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    local bufname = vim.api.nvim_buf_get_name(buf)
+    local modified = vim.api.nvim_get_option_value("modified", { buf = buf, })
+    open_buffers_to_modified[bufname] = modified
+  end
+
+  --- @class ScoredFile
+  --- @field score number
+  --- @field formatted string
+  --- @field matched_idxs number[]
+
+  --- @type ScoredFile[]
+  local scored_files = {}
+
+  local cwd = vim.fn.getcwd()
+  local fd_files = vim.fn.systemlist "fd --absolute-path --type f"
+
+  for _, abs_path in ipairs(fd_files) do
+    local rel_path = vim.fs.relpath(cwd, abs_path)
+    local _, matched_idxs, fuzzy_score_tbl = unpack(vim.fn.matchfuzzypos({ rel_path, }, opts.input))
+    local fuzzy_score = fuzzy_score_tbl[1] or 0
+
+    -- skip files without a fuzzy match
+    if fuzzy_score == 0 then goto continue end
+
+    local boost_score = 0
+    if oldfiles[abs_path] then
+      boost_score = boost_score + 50
+    end
+
+    local is_modified = open_buffers_to_modified[abs_path] == true
+    if is_modified then
+      boost_score = boost_score + 20
+    end
+
+    local is_open_buffer = open_buffers_to_modified[abs_path] ~= nil
+    if is_open_buffer then
+      if abs_path == opts.curr_bufname then
+        boost_score = boost_score - 1000
+      elseif abs_path == opts.alt_bufname then
+        boost_score = boost_score + 30
+      else
+        boost_score = boost_score + 10
+      end
+    end
+
+    local normalized_fuzzy_score = normalize_fuzzy_score { fuzzy_score = fuzzy_score, input_len = #opts.input, }
+    local score = 0.7 * normalized_fuzzy_score + 0.3 * boost_score
+
+    local formatted = ("%s|%s"):format(score, rel_path)
+
+    --- @type ScoredFile
+    local scored_file = {
+      score = score,
+      formatted = formatted,
+      matched_idxs = matched_idxs,
+    }
+    table.insert(scored_files, scored_file)
+
+    ::continue::
+  end
+
+  table.sort(scored_files, function(a, b)
+    return a.score > b.score
+  end)
+
+  return scored_files
+end
+```
+
+Lets add some color to our fuzzy finder and highlight matched characters too:
+
+```lua
+local function fuzzy_find()
+  local curr_bufname_ok, curr_bufname_res = pcall(vim.api.nvim_buf_get_name, 0)
+  local alt_bufname_ok, alt_bufname_res = pcall(vim.api.nvim_buf_get_name, vim.fn.bufnr "#")
+  local curr_bufname = curr_bufname_ok and curr_bufname_res or ""
+  local alt_bufname = alt_bufname_ok and alt_bufname_res or ""
+
+  -- ...
+
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", }, {
+    buffer = input_buf,
+    group = group,
+    callback = function()
+      local input = vim.api.nvim_win_call(input_win, vim.api.nvim_get_current_line)
+
+      local scored_results = get_results { input = input, }
+      local results = {}
+      for idx, scored_result in ipairs(scored_results) do
+        -- only render visible results in the results window
+        if idx > 20 then break end
+        table.insert(results, scored_result.formatted)
+      end
+
+      local strict_indexing = false
+      vim.api.nvim_buf_set_lines(results_buf, 0, -1, strict_indexing, results)
+
+      for idx, scored_result in ipairs(scored_results) do
+        if idx > 20 then break end
+
+        local row_0_indexed = idx - 1
+        for _, matched_idx in ipairs(scored_result.matched_idxs) do
+          local file_offset = scored_result.formatted:find "|"
+          local col = matched_idx + file_offset
+
+          vim.hl.range(
+            results_buf,
+            namespace_id,
+            "Search",
+            { row_0_indexed, col, },
+            { row_0_indexed, col + 1, }
+          )
+        end
+      end
+    end,
+  })
+
+  -- ...
+end
+```
