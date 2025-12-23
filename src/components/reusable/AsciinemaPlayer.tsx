@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import "asciinema-player/dist/bundle/asciinema-player.css";
+import { isVisualRegressionTest } from "src/utils/env";
 
 interface AsciinemaPlayerProps extends AsciinemaPlayerOptions {
   src: string;
@@ -16,8 +17,10 @@ export function AsciinemaPlayer({
   const [player, setPlayer] = useState<typeof import("asciinema-player")>();
 
   useEffect(() => {
-    // the import itself uses `window` so need a dynamic import for the server
-    import("asciinema-player").then((p) => setPlayer(p));
+    if (!isVisualRegressionTest()) {
+      // the import itself uses `window` so need a dynamic import for the server
+      import("asciinema-player").then((p) => setPlayer(p));
+    }
   }, []);
 
   useEffect(() => {

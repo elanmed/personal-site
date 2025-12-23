@@ -5,8 +5,8 @@
     <description>An rss feed for Elan Medoff's blog</description>
     <atom:link href="https://elanmed.dev/rss.xml" rel="self" type="application/rss+xml" />
     <language>en-us</language>
-    <pubDate>Sun, 31 Aug 2025 01:56:46 GMT</pubDate>
-    <lastBuildDate>Sat, 30 Aug 2025 04:00:00 GMT</lastBuildDate>
+    <pubDate>Tue, 23 Dec 2025 00:23:43 GMT</pubDate>
+    <lastBuildDate>Fri, 17 Dec 2027 05:00:00 GMT</lastBuildDate>
     <docs>https://www.rssboard.org/rss-specification</docs>
     <managingEditor>info@elanmed.dev (Elan Medoff)</managingEditor>
     
@@ -58,6 +58,13 @@
     <description>A few interesting tips I've picked up from tinkering with my config</description>
     <pubDate>Sun, 16 Oct 2022 04:00:00 GMT</pubDate>
     <guid>https://elanmed.dev/five-interesting-things-from-my-neovim-config</guid>
+    </item>
+    <item>
+    <title>Lessons in Performance: Caching, Batching, and Fuzzy Matching</title>
+    <link>https://elanmed.dev/blog/fuzzy-finder-lessons-in-performance</link>
+    <description>How I made my frecency-based fuzzy finder fast enough to actually use</description>
+    <pubDate>Fri, 17 Dec 2027 05:00:00 GMT</pubDate>
+    <guid>https://elanmed.dev/fuzzy-finder-lessons-in-performance</guid>
     </item>
     <item>
     <title>Global Find and Replace in Neovim</title>
