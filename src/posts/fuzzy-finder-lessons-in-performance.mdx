@@ -1,8 +1,8 @@
 ---
 title: "Lessons in Performance: Caching, Batching, and Fuzzy Matching"
-abstract: "Caching, batching, and other hard-won lessons"
+abstract: "How I made my frecency-based fuzzy finder fast enough to actually use"
 lastUpdated: "Dec 17, 2027"
-slug: lessons-in-performance-caching-batching-and-fuzzy-matching
+slug: fuzzy-finder-lessons-in-performance
 tags:
   - software eng
   - vim
@@ -11,6 +11,8 @@ isPublished: true
 ---
 
 # Lessons in Performance: Caching, Batching, and Fuzzy Matching
+
+> tl;dr I built my own fuzzy finder called [`ff.nvim`](https://github.com/elanmed/ff.nvim)
 
 About a half a year ago, I started down a rabbit hole of building frecency-based fuzzy finders. At
 the time, I was using [fzf-lua](https://github.com/ibhagwan/fzf-lua/) as my primary picker, and I
@@ -45,14 +47,16 @@ fuzzily filter frecency-ranked files had some caveats I didn't expect:
 
 Given a user input, `fzf-lua-frecency` would eliminate entries based on its fuzzy score and sort
 entries based on its frecency score. That worked, but what I really wanted was a fuzzy finder that
-would sort + eliminate entries based on a ranking comprised of _both_ it's fuzzy and frecency score.
-The difference may sound subtle, but the user experience is drastically different. For the former,
-the order of the search results never changes - entries are only eliminated - but for the latter,
-every keystroke can reorder the files completely.
+would rank files using both their fuzzy match quality and their frecency score together. The
+difference may sound subtle, but the user experience is drastically different. For the former, the
+order of the search results never changes: entries are only eliminated as you type, with frecency
+always determining rank. For the latter, every keystroke can reorder the files completely, allowing
+a file with a great fuzzy match to rank above a frecent file with a poor match. The ranking becomes
+more responsive to what you're actually typing.
 
-Although others have written similar plugins already (i.e.
-[`smart-open.nvim`](https://github.com/danielfalk/smart-open.nvim)), I was interested in building my
-own.
+Around this time, I came across fff.nvim, a new fuzzy file finder with a great name. Inspired, I
+started work on [`ff.nvim`](https://github.com/elanmed/ff.nvim) - I figured it would be a bit more
+barebones and deserved one fewer `f`.
 
 ## First attempt
 
