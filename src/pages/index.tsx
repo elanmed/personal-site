@@ -26,9 +26,9 @@ export default function About({
   const libraryRepoNames = [
     "use-search-param-state",
     "use-stable-reference",
-    "quickfix-preview.nvim",
-    "rg-glob-builder.nvim",
-    "ft-highlight.nvim",
+    "ff.nvim",
+    "tree.nvim",
+    "rg-far.nvim",
     "fzf-lua-frecency.nvim",
   ];
   const libraryRepos = repos.filter(({ name }) => libraryRepoNames.includes(name));
