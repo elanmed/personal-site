@@ -271,19 +271,7 @@ local await = function(promise)
   scheduled_promise(function() coroutine.resume(thread) end)
   coroutine.yield()
 end
-```
 
-`await` is going to be a function which takes in our promise. The promise is going to be called
-_with_ `resolve` immediately, but the promise will only call the resolve function _itself_ when the
-async task is finished. This is where the coroutine magic comes into play: because we're wrapping
-the `promise` function call in a `schedule_wrap`, it will only be _scheduled_ to run when
-`scheduled_promise` is called - `coroutine.yield()` will be called before `scheduled_promise` is.
-`coroutine.yield()` pauses execution until the next `coroutine.resume` - which is our `resolve`
-function that's called when the async task completes!
-
-That gives us this code in `main`:
-
-```lua
 local function promise(resolve)
   vim.fn.timer_start(2000, resolve)
 end
@@ -294,18 +282,31 @@ local function main()
   vim.print "timer callback"
   vim.print "end"
 end
-main()
-```
-
-But one last part: our `await` assumes that it's called in the context of a coroutine - but we have
-no coroutine in `main`. A one-off approach would be to replace `main()` with:
-
-```lua
 coroutine.resume(coroutine.create(main))
+vim.print "after resume"
 ```
 
-But this has a big drawback: errors thrown in `main` are silently swallowed! This is where `async`
-comes into play:
+Let's walk through the execution of this code:
+
+- A coroutine is created with the function `main` and immediately resumed (coroutines are created
+  paused)
+- `"start"` is printed
+- `await` is called with `promise`
+- `scheduled_promise` is created as a function which wraps `promise` in a `vim.schedule`
+- `scheduled_promise` is called, which schedules `promise` to be called in the next tick of the
+  event loop. `promise` is _not_ called now
+- `coroutine.yield()` pauses the coroutine running `main`
+- `"after resume"` is printed
+- There's no more code to run, so Neovim yields back to main thread and renders any pending UI
+  updates
+- `promise` is called
+- `coroutine.resume()` resumes the coroutine that's running `main`, allowing execution to continue
+- `"timer callback"` is printed
+- `"end"` is printed
+
+One last detail: our `await` assumes that it's called in the context of a coroutine, which is why
+the code above wraps `main` in a `coroutine.resume(coroutine.create(main))`. However this has a big
+drawback: errors thrown in `main` are silently swallowed! This is where `async` comes into play:
 
 ```lua
 --- @param fn fun():nil
