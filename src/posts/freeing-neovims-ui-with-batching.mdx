@@ -11,12 +11,13 @@ isPublished: false
 ---
 
 When building a process-intensive Neovim plugin, one of the first things you'll encounter is UI
-freezes. It's frustrating, but it makes sense - Neovim can't update the UI with the latest typed
-keystrokes while
+freezes. It's frustrating, but it makes sense - Neovim's Lua runtime is single threaded, meaning the
+UI can't update as long as something else is running on the main thread. Luckily, with a bit of
+batching and coroutines, we can prevent any freezing with a developer-friendly interface.
 
 ## Boilerplate
 
-To start, let's set up some boilerplate to experience some UI freezing first hand:
+To start, let's set up some boilerplate to experience UI freezing first hand:
 
 ```lua
 local enter_win = true
@@ -66,8 +67,7 @@ The first is just for convenience: when closing either the input or results wind
 closed as well. The second is more relevant: when the input buffer changes, a `populate_results`
 function will run.
 
-Let's start by creating a large table (think the results from `fd`) and looping over the table to
-populate the results buffer:
+Let's start by creating a large table and looping over the table to populate the results buffer:
 
 ```lua
 local large_tbl = {}
@@ -89,14 +89,14 @@ end
 ```
 
 You'll notice that the UI freezes while typing - the entire loop needs to complete before Neovim can
-yield back to the main thread to update the UI with the latest keystroke. Looping a hundred thousand
-times might seem a bit contrived, but I've run into this scenario several times when processing
-results from commands such as `fd` and `rg`. So, how can we free up the UI?
+update the UI with the latest keystroke. Looping a hundred thousand times might seem a bit
+contrived, but I've run into this scenario several times when processing results from commands such
+as `fd` and `rg`. So, how can we free up the UI?
 
 ## Batches
 
 A simple solution is to process the loop with batches, allowing the UI to update between each. A
-simple batcher function could look like the following:
+simple batcher could look like the following:
 
 ```lua
 --- @generic T
@@ -104,7 +104,7 @@ simple batcher function could look like the following:
 --- @param on_iteration fun(entry: T):nil
 --- @param on_complete fun():nil
 --- @param batch_size? number
-local function list_batcher(list, on_iteration, on_complete)
+local function list_batcher(list, on_iteration, on_complete, batch_size)
   batch_size = batch_size or 100
 
   local step
@@ -143,24 +143,24 @@ end
 ```
 
 This works for looping over tables, but how about traversing other iterators? For example, the
-`vim.fs.dir(path)` returns an iterator over the items in its path argument, and our `batcher`
-wouldn't be able to handle it at all.
+`vim.fs.dir(path)` returns an iterator over the items in its path argument, and our `batcher` in its
+current form wouldn't be able to handle that.
 
-## A more generic iterator
+## A generic iterator batcher
 
-A quick crash course on iterators in lua:
+A quick crash course on iterators in Lua:
 
 - An iterator is a function that returns the next element in a collection on every invocation.
-- Iterators are normaly returned by calling another function: an iterator factory. `ipairs(table)`
+- Iterators are normally returned by calling another function: an iterator factory. `ipairs(table)`
   is an example of an iterator factory
-- Calling the iterator factory returns up to three values:
+- Calling the iterator factory returns (up to) three values:
   1. The iterator function
   2. The "invariant state"
   3. The initial value of the "control variable"
 - The iterator function is called with the invariant state and the control variable
 - If the first value returned by the iterator is `nil`, the iteration should end. Otherwise, the
-  control variable is set to the first value returned by the other, and the iterator is called again
-  with the (static) invariant state and the updated control variable
+  control variable is set to the first value returned by the iterator function, and the iterator is
+  called again with the (static) invariant state and the updated control variable
 
 The names are a bit academic, but I generally think its best to use the nomenclature in the
 documentation rather than make something up myself.
@@ -214,15 +214,13 @@ end
 
 ## Basic async-await with coroutines
 
-Our `iterator_batcher` looks solid, but Javascript developers will recognize the potential for
-callback-hell: nesting another `iterator_batcher` within an `on_complete` can lead to some very
-nested and messy code very quickly. How can we "await" batching to avoid an `on_complete` callback?
-Coroutines!
+Our `iterator_batcher` looks solid, but JavaScript developers will recognize the potential for
+callback-hell: adding a nested `iterator_batcher` within an `on_complete` can lead to some very
+indented and hard-to-read code. Instead, how can we "await" the batching in order to perform some
+work which relies on the batching to complete, while also avoiding an `on_complete` callback?
 
-The core of this approach uses three functions: `async`, `await`, and a `promise` - I work in web
+The core of this solution uses three functions: `async`, `await`, and a `promise` - I work in web
 development, so this is the pattern I'm most comfortable with.
-
-The `promise` will be a function that performs the async action and accepts a `resolve` argument:
 
 Let's start with a classic timer example:
 
@@ -241,39 +239,57 @@ main()
 -- timer callback
 ```
 
-How can we promisify this so that the order becomes `start` -> `timer callback` -> `end`. In
-javascript, we would create a promise that resolves in the callback - let's follow the same pattern.
+How can we promise-ify this so that the order becomes `start` -> `timer callback` -> `end`. In
+JavaScript, we would create a promise that is resolved in the callback:
+
+```js
+const promise = new Promise((resolve) => {
+  setTimeout(() => {
+    resolve();
+  }, 2000);
+});
+
+async function main() {
+  console.log("start");
+  await promise;
+  console.log("timer callback");
+  console.log("end");
+}
+main();
+```
+
+Let's try to follow the same pattern.
 
 ```lua
 local function promise(resolve)
   vim.fn.timer_start(2000, resolve)
 end
 
-local function main()
+-- how can we mimic this syntax
+async local function main()
   vim.print "start"
-  await promise -- how can we mimic this syntax?
+  await promise -- and this?
   vim.print "timer callback"
   vim.print "end"
 end
 main()
 ```
 
-I often find it helpful to go in reverse order: start with the interface I'd like to work with and
-then figure out how to build it. So, how can we mimic an `await`? This next section is a bit of a
-jump, but bear with me:
+What we want from `await` is to begin executing the promise, pause, finish executing the promise,
+resume, and continue on. Using coroutines, we can achieve this with just a few more lines of code
+than with JavaScript.
 
 ```lua
+local function promise(resolve)
+  vim.fn.timer_start(2000, resolve)
+end
+
 --- @param promise fun(resolve: fun():nil):nil
 local await = function(promise)
   local thread = coroutine.running()
-  assert(thread ~= nil, "`await` can only be called in a coroutine")
-  local scheduled_promise = vim.schedule_wrap(promise)
-  scheduled_promise(function() coroutine.resume(thread) end)
+  local resume_callback = function() coroutine.resume(thread) end
+  promise(resume_callback)
   coroutine.yield()
-end
-
-local function promise(resolve)
-  vim.fn.timer_start(2000, resolve)
 end
 
 local function main()
@@ -288,25 +304,23 @@ vim.print "after resume"
 
 Let's walk through the execution of this code:
 
-- A coroutine is created with the function `main` and immediately resumed (coroutines are created
-  paused)
+- A coroutine is created with the function `main` and immediately resumed
 - `"start"` is printed
 - `await` is called with `promise`
-- `scheduled_promise` is created as a function which wraps `promise` in a `vim.schedule`
-- `scheduled_promise` is called, which schedules `promise` to be called in the next tick of the
-  event loop. `promise` is _not_ called now
+- `promise` is called, triggering the 2 second timer and scheduling `resume_callback` to be called
+  at the end of the timer
 - `coroutine.yield()` pauses the coroutine running `main`
 - `"after resume"` is printed
-- There's no more code to run, so Neovim yields back to main thread and renders any pending UI
-  updates
-- `promise` is called
-- `coroutine.resume()` resumes the coroutine that's running `main`, allowing execution to continue
+- 2 seconds pass, triggering the callback passed to `timer_start` - which itself calls
+  `resume_callback`
+- `resume_callback` calls `coroutine.resume()`, which resumes the coroutine that's running `main`
 - `"timer callback"` is printed
 - `"end"` is printed
 
-One last detail: our `await` assumes that it's called in the context of a coroutine, which is why
-the code above wraps `main` in a `coroutine.resume(coroutine.create(main))`. However this has a big
-drawback: errors thrown in `main` are silently swallowed! This is where `async` comes into play:
+Notice that `await` assumes that it's called in the context of a coroutine (i.e. it uses
+`coroutine.running`), which is why the code above wraps `main` in a
+`coroutine.resume(coroutine.create(main))`. However this has a big drawback: errors thrown in `main`
+are silently swallowed! This is where a dedicated `async` comes into play:
 
 ```lua
 --- @param fn fun():nil
@@ -332,6 +346,73 @@ local main = async(function()
   vim.print "end"
 end)
 main()
+```
+
+---
+
+One downside of the current `await` function is that it assumes that `resume_callback` isn't called
+immediately: if it is called immediately, then the coroutine is resumed _then_ yielded - with
+nothing to resume the paused coroutine after! A safer approach is to wrap `promise` in
+`vim.schedule_wrap`, which you can think of as a `start_timer` with a timeout of `0`:
+
+```lua
+--- @param promise fun(resolve: fun():nil):nil
+local await = function(promise)
+  local thread = coroutine.running()
+  assert(thread ~= nil, "`await` can only be called in a coroutine")
+  local scheduled_promise = vim.schedule_wrap(promise)
+  local resume_callback = function() coroutine.resume(thread) end
+  scheduled_promise(resume_callback)
+  coroutine.yield()
+end
+```
+
+## An async-await batcher
+
+Back to our batcher function, we can use `async` and `await` to avoid settings the results buffer in
+the `on_complete` callback: the `on_complete` callback: the `on_complete` callback:
+
+```lua
+local populate_results = async(function(input)
+  local results = {}
+  local promise = function(resolve)
+    iterator_batcher(
+      function() return ipairs(large_tbl) end,
+      function(entry)
+        table.insert(results, ("%d :: %s"):format(entry, input))
+      end,
+      resolve
+    )
+  end
+  await(promise)
+  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
+end)
+```
+
+Or a bit more reusable:
+
+```lua
+--- @generic IterState, IterVar
+--- @param iterator_factory fun(): ((fun(invariant_state: IterState, control_var: IterVar):IterVar), IterState, IterVar)
+--- @param on_iteration fun(entry: IterVar):nil
+--- @param batch_size? number
+local function async_iterator_batcher(iterator_factory, on_iteration, batch_size)
+  return function(resolve)
+    iterator_batcher(iterator_factory, on_iteration, resolve, batch_size)
+  end
+end
+
+local populate_results = async(function(input)
+  local results = {}
+  local promise = async_iterator_batcher(
+    function() return ipairs(large_tbl) end,
+    function(entry)
+      table.insert(results, ("%d :: %s"):format(entry, input))
+    end
+  )
+  await(promise)
+  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
+end)
 ```
 
 ## Bonus: A class-based approach
@@ -386,16 +467,17 @@ function Batch:each(on_iteration, on_complete)
   step()
 end
 
+--- @generic T
+--- @param on_iteration fun(entry: T):nil
+function Batch:each_async(on_iteration)
+  return function(resolve) self:each(on_iteration, resolve) end
+end
+
 local main = async(function()
-  local promise = function(resolve)
-    Batch
-        :new(function() return ipairs(list) end)
-        :size(2)
-        :each(
-          function(entry) print(entry) end,
-          resolve
-        )
-  end
+  local promise = Batch
+      :new(function() return ipairs(large_tbl) end)
+      :size(2)
+      :each_async(function(entry) print(entry) end)
   await(promise)
 end)
 main()
