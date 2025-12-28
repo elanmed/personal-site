@@ -169,11 +169,11 @@ The implementation uses some generics for clarity, but the code itself is still 
 
 ```lua
 --- @generic IterState, IterVar
---- @param iterator_factory fun(): fun(invariant_state: IterState, control_var: IterVar):IterVar, IterState, IterVar
+--- @param iterator_factory fun(): ((fun(invariant_state: IterState, control_var: IterVar):IterVar), IterState, IterVar)
 --- @param on_iteration fun(entry: IterVar):nil
 --- @param on_complete fun():nil
 --- @param batch_size? number
-local function iterator_batcher(iterator_factory, on_iteration, on_complete)
+local function iterator_batcher(iterator_factory, on_iteration, on_complete, batch_size)
   batch_size = batch_size or 100
 
   local iter_fn, invariant_state, control_var = iterator_factory()
@@ -265,7 +265,7 @@ local function promise(resolve)
   vim.fn.timer_start(2000, resolve)
 end
 
--- how can we mimic this syntax
+-- how can we create this syntax?
 async local function main()
   vim.print "start"
   await promise -- and this?
@@ -311,8 +311,7 @@ Let's walk through the execution of this code:
   at the end of the timer
 - `coroutine.yield()` pauses the coroutine running `main`
 - `"after resume"` is printed
-- 2 seconds pass, triggering the callback passed to `timer_start` - which itself calls
-  `resume_callback`
+- 2 seconds pass, triggering the callback passed to `timer_start` - which calls `resume_callback`
 - `resume_callback` calls `coroutine.resume()`, which resumes the coroutine that's running `main`
 - `"timer callback"` is printed
 - `"end"` is printed
@@ -320,10 +319,19 @@ Let's walk through the execution of this code:
 Notice that `await` assumes that it's called in the context of a coroutine (i.e. it uses
 `coroutine.running`), which is why the code above wraps `main` in a
 `coroutine.resume(coroutine.create(main))`. However this has a big drawback: errors thrown in `main`
-are silently swallowed! This is where a dedicated `async` comes into play:
+are silently swallowed! Try running this code, nothing is thrown:
 
 ```lua
---- @param fn fun():nil
+local function main()
+  error "Swallowed!"
+end
+coroutine.resume(coroutine.create(main))
+```
+
+This is where a dedicated `async` comes into play:
+
+```lua
+--- @param fn fun(...):nil
 local async = function(fn)
   return function(...)
     local ok, err = coroutine.resume(coroutine.create(fn), ...)
@@ -352,7 +360,7 @@ main()
 
 One downside of the current `await` function is that it assumes that `resume_callback` isn't called
 immediately: if it is called immediately, then the coroutine is resumed _then_ yielded - with
-nothing to resume the paused coroutine after! A safer approach is to wrap `promise` in
+nothing to resume the paused coroutine afterwards! A safer approach is to wrap `promise` in
 `vim.schedule_wrap`, which you can think of as a `start_timer` with a timeout of `0`:
 
 ```lua
@@ -370,7 +378,7 @@ end
 ## An async-await batcher
 
 Back to our batcher function, we can use `async` and `await` to avoid settings the results buffer in
-the `on_complete` callback: the `on_complete` callback: the `on_complete` callback:
+the `on_complete` callback:
 
 ```lua
 local populate_results = async(function(input)
@@ -473,12 +481,15 @@ function Batch:each_async(on_iteration)
   return function(resolve) self:each(on_iteration, resolve) end
 end
 
-local main = async(function()
+local populate_results = async(function(input)
+  local results = {}
   local promise = Batch
       :new(function() return ipairs(large_tbl) end)
-      :size(2)
-      :each_async(function(entry) print(entry) end)
+      :size(100)
+      :each_async(function(entry)
+        table.insert(results, ("%d :: %s"):format(entry, input))
+      end)
   await(promise)
+  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
 end)
-main()
 ```
