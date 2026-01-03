@@ -95,7 +95,7 @@ update the UI with the latest keystroke. Looping a hundred thousand times might 
 contrived, but I've run into this scenario several times when processing results from commands such
 as `fd` and `rg`. How can we free up the UI?
 
-## Batches
+## Batching part 1: the basics
 
 The solution is batching: break the loop into chunks, process one chunk at a time, and schedule the
 next chunk after each UI update.
@@ -150,9 +150,10 @@ This works for looping over tables, but how about traversing other iterators? Fo
 `vim.fs.dir(path)` returns an iterator over the items in its path argument - in its current form,
 our batcher wouldn't be able to handle it.
 
-## A generic iterator batcher
+## Batching part 2: handling generic iterators
 
-A quick crash-course on iterators in Lua:
+A quick crash-course on iterators in Lua (based on the official
+[docs](https://www.lua.org/pil/7.1.html)):
 
 - An iterator is a function that returns the next element in a collection on every invocation
 - Iterators are normally returned by calling another function: an iterator factory. `ipairs(table)`
@@ -217,7 +218,7 @@ local function populate_results(input)
 end
 ```
 
-## Basic async-await with coroutines
+## Interlude: basic async-await with coroutines
 
 Our `iterator_batcher` looks solid, but JavaScript developers will recognize the potential for
 callback-hell: adding a nested `iterator_batcher` within an `on_complete` can lead to some very
@@ -239,6 +240,7 @@ local function main()
 end
 main()
 
+-- prints:
 -- start
 -- end
 -- timer callback
@@ -261,6 +263,11 @@ async function main() {
   console.log("end");
 }
 main();
+
+// logs:
+// start
+// timer callback
+// end
 ```
 
 Let's try to follow the same pattern.
@@ -305,6 +312,12 @@ local function main()
 end
 coroutine.resume(coroutine.create(main))
 vim.print "after resume"
+
+-- prints:
+-- start
+-- after resume
+-- timer callback
+-- end
 ```
 
 Let's walk through the execution of this code:
@@ -324,7 +337,7 @@ Let's walk through the execution of this code:
 Notice that `await` assumes that it's called in the context of a coroutine (i.e. it uses
 `coroutine.running`), which is why the code above wraps `main` in a
 `coroutine.resume(coroutine.create(main))`. However this code has a flaw: errors thrown in `main`
-are silently swallowed! Try running this code:
+are silently swallowed! Try running this snippet:
 
 ```lua
 local function main()
@@ -364,9 +377,9 @@ main()
 ---
 
 One downside of the current `await` function is that it assumes that `resume_callback` isn't called
-immediately: if it was called immediately, then the coroutine would resume _then_ yield with nothing
-to resume the paused coroutine afterwards! A safer approach is to wrap `promise` in
-`vim.schedule_wrap`, which you can think of as a `timer_start` with a timeout of `0`:
+immediately i.e. if it was called immediately, then the coroutine would _first_ resume _then_
+yield - with nothing to resume the paused coroutine afterwards! A safer approach is to wrap
+`promise` in `vim.schedule_wrap`, which you can think of as a `timer_start` with a timeout of `0`:
 
 ```lua
 --- @param promise fun(resolve: fun():nil):nil
@@ -380,7 +393,7 @@ local await = function(promise)
 end
 ```
 
-## An async-await batcher
+## Batching part 3: async-await
 
 Back to our batcher function, we can use `async` and `await` to set the results buffer at the same
 level of indentation as the `iterator_batcher`:
@@ -499,4 +512,4 @@ local populate_results = async(function(input)
 end)
 ```
 
-No conclusion for this one, thanks for reading.
+Thanks for reading.
