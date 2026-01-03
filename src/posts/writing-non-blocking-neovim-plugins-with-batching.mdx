@@ -10,6 +10,8 @@ collection: null
 isPublished: false
 ---
 
+# Writing Non-Blocking Neovim Plugins with Batching
+
 When building a process-intensive Neovim plugin, one of the first things you'll encounter is an
 unresponsive editor: since Neovim's Lua runtime is single threaded, the UI can't update while
 something else is running on the main thread. Thankfully, with a bit of batching and coroutines, we
