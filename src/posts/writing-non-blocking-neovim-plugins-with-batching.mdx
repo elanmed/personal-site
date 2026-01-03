@@ -1,8 +1,8 @@
 ---
-title: "Freeing Neovim's UI with batching"
-abstract: "Template abstract"
-lastUpdated: "December 21, 2025"
-slug: freeing-neovims-ui-with-batching
+title: "Writing Non-Blocking Neovim Plugins with Batching"
+abstract: "Prevent UI freezes using batched iteration and coroutine-based async-await"
+lastUpdated: "January 03, 2026"
+slug: writing-non-blocking-neovim-plugins-with-batching
 tags:
   - software eng
   - vim
@@ -497,14 +497,4 @@ local populate_results = async(function(input)
 end)
 ```
 
-## Wrapping up
-
-We've gone from a simple loop that freezes the UI to a flexible batching system that keeps Neovim
-responsive. The callback-based `iterator_batcher` works for straightforward cases, while the
-async-await pattern keeps the code readable when you need to chain batcher invocations. Last but not
-least, the class-based approach is a personal favorite to avoid passing in four arguments at once to
-the batcher function.
-
-The core principle stays the same for each approach: break work into chunks, process each chunk, and
-let the UI catch up between batches. Pick whichever fits your plugin's complexity - thanks for
-reading.
+No conclusion for this one, thanks for reading.
