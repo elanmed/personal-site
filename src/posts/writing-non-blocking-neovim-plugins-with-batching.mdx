@@ -441,6 +441,79 @@ local populate_results = async(function(input)
 end)
 ```
 
+## Cancellation
+
+One missing feature of our implementation is the ability to cancel an ongoing process. Our
+boilerplate code could make very good use of such a feature: there's no need to process old user
+inputs since we only want to display the results for the latest user input. This can be achieved by
+tracking the current instance of `populate_results` with a `current_query_id` variable:
+
+```lua
+--- @generic InvariantState, ControlVar
+--- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
+--- @param on_iteration fun(entry: ControlVar):nil
+--- @param on_complete fun():nil
+--- @param should_cancel fun():boolean
+--- @param batch_size_inclusive? number
+local function iterator_batcher(iterator_factory, on_iteration, on_complete, should_cancel, batch_size_inclusive)
+  batch_size_inclusive = batch_size_inclusive or 100
+
+  local iter_fn, invariant_state, control_var = iterator_factory()
+  local step
+  step = function()
+    local num_processed = 0
+    while num_processed < batch_size_inclusive do
+      if should_cancel() then return end
+
+      local values = { iter_fn(invariant_state, control_var), }
+      control_var = values[1]
+
+      if control_var == nil then
+        on_complete()
+        return
+      end
+
+      on_iteration(unpack(values))
+      num_processed = num_processed + 1
+    end
+    vim.schedule(step)
+  end
+  step()
+end
+
+--- @generic InvariantState, ControlVar
+--- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
+--- @param on_iteration fun(entry: ControlVar):nil
+--- @param should_cancel fun():boolean
+--- @param batch_size_inclusive? number
+local function async_iterator_batcher(iterator_factory, on_iteration, should_cancel, batch_size_inclusive)
+  return function(resolve)
+    iterator_batcher(iterator_factory, on_iteration, resolve, should_cancel, batch_size_inclusive)
+  end
+end
+
+local current_query_id = 0
+
+local populate_results = async(function(input)
+  current_query_id = current_query_id + 1
+  local this_query_id = current_query_id
+
+  local results = {}
+  local promise = async_iterator_batcher(
+    function() return ipairs(large_tbl) end,
+    function(entry)
+      table.insert(results, ("%d :: %s"):format(entry, input))
+    end,
+    -- new
+    function()
+      return this_query_id ~= current_query_id
+    end
+  )
+  await(promise)
+  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
+end)
+```
+
 ## An alternative to batching: time-based yielding
 
 An alternative to batching is to simply pause execution every `n` milliseconds - an approach
@@ -454,8 +527,10 @@ occasionally pause and resume in a `vim.schedule`.
 --- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
 --- @param on_iteration fun(entry: ControlVar):nil
 --- @param on_complete fun():nil
-local function iterator_throttled(iterator_factory, on_iteration, on_complete)
-  local threshold_ns = 10 * 1000000
+--- @param should_cancel fun():boolean
+--- @param threshold_ns? number
+local function iterator_throttled(iterator_factory, on_iteration, on_complete, should_cancel, threshold_ns)
+  threshold_ns = threshold_ns or (10 * 1000000)
 
   local function create_throttle()
     local last_yield = vim.loop.hrtime()
@@ -475,6 +550,7 @@ local function iterator_throttled(iterator_factory, on_iteration, on_complete)
 
     local iter_fn, invariant_state, control_var = iterator_factory()
     while true do
+      should_cancel()
       maybe_pause()
 
       local values = { iter_fn(invariant_state, control_var), }
@@ -505,51 +581,34 @@ For completeness, here's an `async_iterator_batcher` and its invocation:
 --- @generic InvariantState, ControlVar
 --- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
 --- @param on_iteration fun(entry: ControlVar):nil
-local function async_iterator_throttled(iterator_factory, on_iteration)
+--- @param should_cancel fun():boolean
+--- @param threshold_ns? number
+local function async_iterator_throttled(iterator_factory, on_iteration, should_cancel, threshold_ns)
   return function(resolve)
-    iterator_throttled(iterator_factory, on_iteration, resolve)
+    iterator_throttled(iterator_factory, on_iteration, resolve, should_cancel, threshold_ns)
   end
 end
 
+local current_query_id = 0
+
 local populate_results = async(function(input)
+  current_query_id = current_query_id + 1
+  local this_query_id = current_query_id
+
   local results = {}
   local promise = async_iterator_throttled(
     function() return ipairs(large_tbl) end,
     function(entry)
       table.insert(results, ("%d :: %s"):format(entry, input))
+    end,
+    function()
+      return this_query_id ~= current_query_id
     end
   )
   await(promise)
   vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
 end)
 ```
-
-For completeness, an `async_iterator_batcher` and its invocation:
-
-```lua
---- @generic InvariantState, ControlVar
---- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
---- @param on_iteration fun(entry: ControlVar):nil
-local function async_iterator_throttled(iterator_factory, on_iteration)
-  return function(resolve)
-    iterator_throttled(iterator_factory, on_iteration, resolve)
-  end
-end
-
-local populate_results = async(function(input)
-  local results = {}
-  local promise = async_iterator_throttled(
-    function() return ipairs(large_tbl) end,
-    function(entry)
-      table.insert(results, ("%d :: %s"):format(entry, input))
-    end
-  )
-  await(promise)
-  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
-end)
-```
-
-## Cancellation
 
 ## Bonus: A class-based approaches
 
