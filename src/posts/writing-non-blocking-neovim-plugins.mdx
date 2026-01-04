@@ -441,7 +441,7 @@ local populate_results = async(function(input)
 end)
 ```
 
-## Batching part 3: cancellation
+## Batching part 3: cancel stale iterations
 
 One missing feature of our implementation is the ability to cancel an ongoing process. Our
 boilerplate code could make very good use of such a feature: there's no need to process old user
