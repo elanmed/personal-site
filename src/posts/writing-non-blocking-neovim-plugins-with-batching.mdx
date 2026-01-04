@@ -610,7 +610,7 @@ local populate_results = async(function(input)
 end)
 ```
 
-## Bonus: A class-based approaches
+## Bonus: Class-based builder patterns
 
 I'm personally a fan of the builder pattern, so I prefer to use class-based functions like the
 following:
@@ -619,6 +619,7 @@ following:
 --- @class Batch
 --- @field _iterator_factory fun(): ((fun(invariant_state: any, control_var: any):any), any, any)
 --- @field _batch_size_inclusive number
+--- @field _should_cancel fun():boolean
 local Batch = {}
 Batch.__index = Batch
 
@@ -629,6 +630,7 @@ function Batch:new(iterator_factory)
   local this = {
     _iteratory_factory = iterator_factory,
     _batch_size_inclusive = math.huge,
+    _should_cancel = function() return false end,
   }
 
   setmetatable(this, Batch)
@@ -642,16 +644,24 @@ function Batch:size(size)
   return self
 end
 
+--- @param should_cancel fun(): boolean
+--- @return Batch
+function Batch:should_cancel(should_cancel)
+  self._should_cancel = should_cancel
+  return self
+end
+
 --- @generic T
 --- @param on_iteration fun(entry: T):nil
 --- @param on_complete fun():nil
 --- @return nil
 function Batch:each(on_iteration, on_complete)
-  local iter_fn, invariant_state, control_var = self._iteratory_factory()
+  local iter_fn, invariant_state, control_var = self._iterator_factory()
   local step
   step = function()
     local num_processed = 0
     while num_processed < self._batch_size_inclusive do
+      if self._should_cancel() then return end
       local values = { iter_fn(invariant_state, control_var), }
       control_var = values[1]
 
@@ -675,11 +685,19 @@ function Batch:each_async(on_iteration)
   return function(resolve) self:each(on_iteration, resolve) end
 end
 
+local current_query_id = 0
+
 local populate_results = async(function(input)
+  current_query_id = current_query_id + 1
+  local this_query_id = current_query_id
+
   local results = {}
   local promise = Batch
       :new(function() return ipairs(large_tbl) end)
       :size(100)
+      :should_cancel(function()
+        return this_query_id ~= current_query_id
+      end)
       :each_async(function(entry)
         table.insert(results, ("%d :: %s"):format(entry, input))
       end)
@@ -693,6 +711,7 @@ Or:
 ```lua
 --- @class Throttle
 --- @field _iterator_factory fun(): ((fun(invariant_state: any, control_var: any):any), any, any)
+--- @field _should_cancel fun():boolean
 --- @field _threshold_ns number
 local Throttle = {}
 Throttle.__index = Throttle
@@ -705,6 +724,7 @@ function Throttle:new(iterator_factory)
   local this = {
     _iterator_factory = iterator_factory,
     _threshold_ns = ns_10,
+    _should_cancel = function() return false end,
   }
 
   setmetatable(this, Throttle)
@@ -715,6 +735,13 @@ end
 --- @return Throttle
 function Throttle:threshold_ns(threshold_ns)
   self._threshold_ns = threshold_ns
+  return self
+end
+
+--- @param should_cancel fun(): boolean
+--- @return Throttle
+function Throttle:should_cancel(should_cancel)
+  self._should_cancel = should_cancel
   return self
 end
 
@@ -741,6 +768,7 @@ function Throttle:each(on_iteration, on_complete)
 
     local iter_fn, invariant_state, control_var = self._iterator_factory()
     while true do
+      if self._should_cancel() then return end
       maybe_pause()
 
       local values = { iter_fn(invariant_state, control_var), }
@@ -766,11 +794,19 @@ function Throttle:each_async(on_iteration)
   return function(resolve) self:each(on_iteration, resolve) end
 end
 
+local current_query_id = 0
+
 local populate_results = async(function(input)
+  current_query_id = current_query_id + 1
+  local this_query_id = current_query_id
+
   local results = {}
   local promise = Throttle
       :new(function() return ipairs(large_tbl) end)
       :threshold_ns(10)
+      :should_cancel(function()
+        return this_query_id ~= current_query_id
+      end)
       :each_async(function(entry)
         table.insert(results, ("%d :: %s"):format(entry, input))
       end)
