@@ -453,6 +453,9 @@ tracking the current instance of `populate_results` with a `current_query_id` va
 --- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
 --- @param on_iteration fun(entry: ControlVar):nil
 --- @param on_complete fun():nil
+---
+--- new argument
+---
 --- @param should_cancel fun():boolean
 --- @param batch_size_inclusive? number
 local function iterator_batcher(iterator_factory, on_iteration, on_complete, should_cancel, batch_size_inclusive)
@@ -463,6 +466,7 @@ local function iterator_batcher(iterator_factory, on_iteration, on_complete, sho
   step = function()
     local num_processed = 0
     while num_processed < batch_size_inclusive do
+      -- and its invocation
       if should_cancel() then return end
 
       local values = { iter_fn(invariant_state, control_var), }
@@ -484,14 +488,19 @@ end
 --- @generic InvariantState, ControlVar
 --- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
 --- @param on_iteration fun(entry: ControlVar):nil
+---
+--- new argument
+---
 --- @param should_cancel fun():boolean
 --- @param batch_size_inclusive? number
 local function async_iterator_batcher(iterator_factory, on_iteration, should_cancel, batch_size_inclusive)
   return function(resolve)
+    -- `should_cancel` is also passed along to `iterator_batcher`
     iterator_batcher(iterator_factory, on_iteration, resolve, should_cancel, batch_size_inclusive)
   end
 end
 
+-- new variable
 local current_query_id = 0
 
 local populate_results = async(function(input)
@@ -504,7 +513,7 @@ local populate_results = async(function(input)
     function(entry)
       table.insert(results, ("%d :: %s"):format(entry, input))
     end,
-    -- new
+    -- new argument
     function()
       return this_query_id ~= current_query_id
     end
