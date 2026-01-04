@@ -5,7 +5,7 @@
     <description>An rss feed for Elan Medoff's blog</description>
     <atom:link href="https://elanmed.dev/rss.xml" rel="self" type="application/rss+xml" />
     <language>en-us</language>
-    <pubDate>Sat, 03 Jan 2026 22:58:48 GMT</pubDate>
+    <pubDate>Sun, 04 Jan 2026 20:13:06 GMT</pubDate>
     <lastBuildDate>Sat, 03 Jan 2026 05:00:00 GMT</lastBuildDate>
     <docs>https://www.rssboard.org/rss-specification</docs>
     <managingEditor>info@elanmed.dev (Elan Medoff)</managingEditor>
@@ -151,9 +151,16 @@
     <guid>https://elanmed.dev/typescript-type-assertions-cheat-sheet</guid>
     </item>
     <item>
-    <title>Writing Non-Blocking Neovim Plugins with Batching</title>
+    <title>Writing Non-Blocking Neovim Plugins</title>
+    <link>https://elanmed.dev/blog/writing-non-blocking-neovim-plugins</link>
+    <description>Prevent UI freezes using batched and threshold-based iterations</description>
+    <pubDate>Sat, 03 Jan 2026 05:00:00 GMT</pubDate>
+    <guid>https://elanmed.dev/writing-non-blocking-neovim-plugins</guid>
+    </item>
+    <item>
+    <title>Writing Non-Blocking Neovim Plugins</title>
     <link>https://elanmed.dev/blog/writing-non-blocking-neovim-plugins-with-batching</link>
-    <description>Prevent UI freezes using batched iteration and coroutine-based async-await</description>
+    <description>Prevent UI freezes using batched and threshold-based iterations</description>
     <pubDate>Sat, 03 Jan 2026 05:00:00 GMT</pubDate>
     <guid>https://elanmed.dev/writing-non-blocking-neovim-plugins-with-batching</guid>
     </item>

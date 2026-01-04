@@ -24,5 +24,6 @@
 <url><loc>https://elanmed.dev/blog/third-party-narration-rarely-works</loc></url>
 <url><loc>https://elanmed.dev/blog/tie-together-smaller-arcs</loc></url>
 <url><loc>https://elanmed.dev/blog/typescript-type-assertions-cheat-sheet</loc></url>
+<url><loc>https://elanmed.dev/blog/writing-non-blocking-neovim-plugins</loc></url>
 <url><loc>https://elanmed.dev/blog/writing-non-blocking-neovim-plugins-with-batching</loc></url>
 </urlset>
