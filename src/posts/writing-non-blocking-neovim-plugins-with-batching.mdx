@@ -1,5 +1,5 @@
 ---
-title: "Writing Non-Blocking Neovim Plugins with Batching"
+title: "Writing Non-Blocking Neovim Plugins"
 abstract: "Prevent UI freezes using batched iteration and coroutine-based async-await"
 lastUpdated: "January 03, 2026"
 slug: writing-non-blocking-neovim-plugins-with-batching
@@ -10,7 +10,7 @@ collection: null
 isPublished: true
 ---
 
-# Writing Non-Blocking Neovim Plugins with Batching
+# Writing Non-Blocking Neovim Plugins
 
 When building a process-intensive Neovim plugin, one of the first things you'll encounter is an
 unresponsive editor: since Neovim's Lua runtime is single threaded, the UI can't update while
@@ -93,12 +93,12 @@ end
 You'll notice that the UI freezes while typing - the entire loop needs to complete before Neovim can
 update the UI with the latest keystroke. Looping a hundred thousand times might seem a bit
 contrived, but I've run into this scenario several times when processing results from commands such
-as `fd` and `rg`. How can we free up the UI?
+as `fd` and `rg`. How do we fix this?
 
 ## Batching part 1: the basics
 
-The solution is batching: break the loop into chunks, process one chunk at a time, and schedule the
-next chunk after each UI update.
+The first solution we'll look at is batching: break the loop into chunks, process one chunk at a
+time, and schedule the next chunk after each UI update.
 
 A simple implementation could look like:
 
@@ -441,10 +441,120 @@ local populate_results = async(function(input)
 end)
 ```
 
-## Bonus: A class-based approach
+## An alternative to batching: time-based yielding
 
-I'm personally a fan of the builder pattern, so I prefer to use a class-based batcher function like
-the following:
+An alternative to batching is to simply pause execution every `n` milliseconds - an approach
+inspired by [`mini.pick`](https://github.com/nvim-mini/mini.pick).
+
+In this solution we'll support generic iterators as before, but use coroutines internally to
+occasionally pause and resume in a `vim.schedule`.
+
+```lua
+--- @generic InvariantState, ControlVar
+--- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
+--- @param on_iteration fun(entry: ControlVar):nil
+--- @param on_complete fun():nil
+local function iterator_throttled(iterator_factory, on_iteration, on_complete)
+  local threshold_ns = 10 * 1000000
+
+  local function create_throttle()
+    local last_yield = vim.loop.hrtime()
+    return function()
+      local now = vim.loop.hrtime()
+      if (now - last_yield) >= threshold_ns then
+        last_yield = now
+        local thread = coroutine.running()
+        vim.schedule(function() coroutine.resume(thread) end)
+        coroutine.yield()
+      end
+    end
+  end
+
+  local function process()
+    local maybe_pause = create_throttle()
+
+    local iter_fn, invariant_state, control_var = iterator_factory()
+    while true do
+      maybe_pause()
+
+      local values = { iter_fn(invariant_state, control_var), }
+      control_var = values[1]
+
+      if control_var == nil then
+        on_complete()
+        return
+      end
+
+      on_iteration(unpack(values))
+    end
+  end
+
+  local promise = async(process)
+  promise()
+end
+```
+
+The main advantage of `iterator_throttled` over `iterator_batcher` is that `iterator_throttled` is
+hardware-independent. `iterator_batcher` yields every `n` batches, regardless of how long those
+batches take to process on the machine in question. 10 nanoseconds, on the other hand, is always 10
+nanoseconds.
+
+For completeness, here's an `async_iterator_batcher` and its invocation:
+
+```lua
+--- @generic InvariantState, ControlVar
+--- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
+--- @param on_iteration fun(entry: ControlVar):nil
+local function async_iterator_throttled(iterator_factory, on_iteration)
+  return function(resolve)
+    iterator_throttled(iterator_factory, on_iteration, resolve)
+  end
+end
+
+local populate_results = async(function(input)
+  local results = {}
+  local promise = async_iterator_throttled(
+    function() return ipairs(large_tbl) end,
+    function(entry)
+      table.insert(results, ("%d :: %s"):format(entry, input))
+    end
+  )
+  await(promise)
+  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
+end)
+```
+
+For completeness, an `async_iterator_batcher` and its invocation:
+
+```lua
+--- @generic InvariantState, ControlVar
+--- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
+--- @param on_iteration fun(entry: ControlVar):nil
+local function async_iterator_throttled(iterator_factory, on_iteration)
+  return function(resolve)
+    iterator_throttled(iterator_factory, on_iteration, resolve)
+  end
+end
+
+local populate_results = async(function(input)
+  local results = {}
+  local promise = async_iterator_throttled(
+    function() return ipairs(large_tbl) end,
+    function(entry)
+      table.insert(results, ("%d :: %s"):format(entry, input))
+    end
+  )
+  await(promise)
+  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
+end)
+```
+
+## Cancellation
+
+## Bonus: A class-based approaches
+
+I'm personally a fan of the builder pattern, so I prefer to use class-based functions like the
+following:
 
 ```lua
 --- @class Batch
@@ -511,6 +621,97 @@ local populate_results = async(function(input)
   local promise = Batch
       :new(function() return ipairs(large_tbl) end)
       :size(100)
+      :each_async(function(entry)
+        table.insert(results, ("%d :: %s"):format(entry, input))
+      end)
+  await(promise)
+  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
+end)
+```
+
+Or:
+
+```lua
+--- @class Throttle
+--- @field _iterator_factory fun(): ((fun(invariant_state: any, control_var: any):any), any, any)
+--- @field _threshold_ns number
+local Throttle = {}
+Throttle.__index = Throttle
+
+--- @generic InvariantState, ControlVar
+--- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
+--- @return Throttle
+function Throttle:new(iterator_factory)
+  local ns_10 = 10 * 1000000
+  local this = {
+    _iterator_factory = iterator_factory,
+    _threshold_ns = ns_10,
+  }
+
+  setmetatable(this, Throttle)
+  return this
+end
+
+--- @param threshold_ns number
+--- @return Throttle
+function Throttle:threshold_ns(threshold_ns)
+  self._threshold_ns = threshold_ns
+  return self
+end
+
+--- @generic T
+--- @param on_iteration fun(entry: T):nil
+--- @param on_complete fun():nil
+--- @return nil
+function Throttle:each(on_iteration, on_complete)
+  local function create_throttle()
+    local last_yield = vim.loop.hrtime()
+    return function()
+      local now = vim.loop.hrtime()
+      if (now - last_yield) >= self._threshold_ns then
+        last_yield = now
+        local thread = coroutine.running()
+        vim.schedule(function() coroutine.resume(thread) end)
+        coroutine.yield()
+      end
+    end
+  end
+
+  local function process()
+    local maybe_pause = create_throttle()
+
+    local iter_fn, invariant_state, control_var = self._iterator_factory()
+    while true do
+      maybe_pause()
+
+      local values = { iter_fn(invariant_state, control_var), }
+      control_var = values[1]
+
+      if control_var == nil then
+        on_complete()
+        return
+      end
+
+      on_iteration(unpack(values))
+    end
+  end
+
+  local promise = async(process)
+  promise()
+end
+
+--- @generic T
+--- @param on_iteration fun(entry: T):nil
+--- @return fun(resolve: fun():nil):nil
+function Throttle:each_async(on_iteration)
+  return function(resolve) self:each(on_iteration, resolve) end
+end
+
+local populate_results = async(function(input)
+  local results = {}
+  local promise = Throttle
+      :new(function() return ipairs(large_tbl) end)
+      :threshold_ns(10)
       :each_async(function(entry)
         table.insert(results, ("%d :: %s"):format(entry, input))
       end)
