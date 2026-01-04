@@ -1,7 +1,7 @@
 ---
 title: "Writing Non-Blocking Neovim Plugins"
-abstract: "Prevent UI freezes using batched and threshold-based iterations"
-lastUpdated: "January 03, 2026"
+abstract: "Prevent UI freezes with batching and throttling abstractions"
+lastUpdated: "January 04, 2026"
 slug: writing-non-blocking-neovim-plugins
 tags:
   - software eng
@@ -14,12 +14,16 @@ isPublished: true
 
 When building a process-intensive Neovim plugin, one of the first things you'll encounter is an
 unresponsive editor: since Neovim's Lua runtime is single threaded, the UI can't update while
-something else is running on the main thread. Thankfully, with a bit of batching and coroutines, we
-can prevent the editor from hanging while maintaining a developer-friendly interface.
+something else is running on the main thread. Thankfully, with a bit of work and a few abstractions,
+we can prevent the editor from hanging.
+
+First, we’ll build a classic batching iterator that processes fixed-size chunks of `n` items, then
+move on to a throttled iterator that processes as many items as possible within `m` seconds. Let's
+get started.
 
 ## Boilerplate
 
-To start, let's set up some boilerplate to experience an unresponsive editor first hand:
+First, let's set up some boilerplate to experience an unresponsive editor first hand:
 
 ```lua
 local enter_win = true
@@ -103,21 +107,26 @@ time, and schedule the next chunk after each UI update.
 A simple implementation could look like:
 
 ```lua
+--- @class ListBatcherOpts
+--- @field on_complete? fun():nil
+--- @field batch_size? number
+
 --- @generic T
 --- @param list T[]
 --- @param on_iteration fun(entry: T):nil
---- @param on_complete fun():nil
---- @param batch_size_inclusive? number
-local function list_batcher(list, on_iteration, on_complete, batch_size_inclusive)
-  batch_size_inclusive = batch_size_inclusive or 100
+--- @param opts? ListBatcherOpts
+local function list_batcher(list, on_iteration, opts)
+  opts = opts or {}
+  local batch_size = opts.batch_size or 100
+  local on_complete = opts.on_complete or (function() end)
 
   local step
   --- @param start number
   step = function(start)
-    for i = start, math.min(#list, start + batch_size_inclusive - 1) do
+    for i = start, math.min(#list, start + batch_size - 1) do
       on_iteration(list[i])
     end
-    start = start + batch_size_inclusive
+    start = start + batch_size
     if start > #list then
       on_complete()
     else
@@ -139,12 +148,19 @@ local function populate_results(input)
     function(entry)
       table.insert(results, ("%d :: %s"):format(entry, input))
     end,
-    function()
-      vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
-    end
+    {
+      on_complete = function()
+        vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
+      end
+    }
   )
 end
 ```
+
+> I'd prefer to pass all parameters along as `opts`, but the lua language server doesn't support
+> passing along generics to classes i.e. `T` to `ListBatcherOpts<T>`. Since `list` and
+> `on_iteration` are the only parameters that make use of `T`, it's simplest to keep those two as
+> named parameters and move everything else to `opts`
 
 This works for looping over tables, but how about traversing other iterators? For example, the
 `vim.fs.dir(path)` returns an iterator over the items in its path argument - in its current form,
@@ -174,19 +190,24 @@ The implementation below uses several generic types for clarity, but that can be
 itself is the same either way.
 
 ```lua
+--- @class BatchedIteratorOpts
+--- @field on_complete? fun():nil
+--- @field batch_size? number
+
 --- @generic InvariantState, ControlVar
 --- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
 --- @param on_iteration fun(entry: ControlVar):nil
---- @param on_complete fun():nil
---- @param batch_size_inclusive? number
-local function iterator_batcher(iterator_factory, on_iteration, on_complete, batch_size_inclusive)
-  batch_size_inclusive = batch_size_inclusive or 100
+--- @param opts? ListBatcherOpts
+local function batched_iterator(iterator_factory, on_iteration, opts)
+  opts = opts or {}
+  local batch_size = opts.batch_size or 100
+  local on_complete = opts.on_complete or (function() end)
 
   local iter_fn, invariant_state, control_var = iterator_factory()
   local step
   step = function()
     local num_processed = 0
-    while num_processed < batch_size_inclusive do
+    while num_processed < batch_size do
       local values = { iter_fn(invariant_state, control_var), }
       control_var = values[1]
 
@@ -206,266 +227,51 @@ end
 --- @param input string
 local function populate_results(input)
   local results = {}
-  iterator_batcher(
+  batched_iterator(
     function() return ipairs(large_tbl) end,
     function(entry)
       table.insert(results, ("%d :: %s"):format(entry, input))
     end,
-    function()
-      vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
-    end
+    {
+      on_complete = function()
+        vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
+      end
+    }
   )
 end
-```
-
-## Interlude: basic async-await with coroutines
-
-Our `iterator_batcher` looks solid, but JavaScript developers will recognize the potential for
-callback-hell: adding a nested `iterator_batcher` within an `on_complete` can lead to some very
-indented and hard-to-read code. Instead, how can we "await" the batching in order to perform some
-work which relies on the batching to complete, while also avoiding an `on_complete` callback?
-
-The core of this solution uses three functions: `async`, `await`, and a `promise` - I work in web
-development, so this is the pattern I'm most comfortable with.
-
-Let's start with a classic timer example:
-
-```lua
-local function main()
-  vim.print "start"
-  vim.fn.timer_start(2000, function()
-    vim.print "timer callback"
-  end)
-  vim.print "end"
-end
-main()
-
--- prints:
--- start
--- end
--- timer callback
-```
-
-How can we update the code so that the printed order becomes `start` -> `timer callback` -> `end`.
-In JavaScript, we would create a promise that's resolved in the timer's callback:
-
-```js
-const promise = new Promise((resolve) => {
-  setTimeout(() => {
-    resolve();
-  }, 2000);
-});
-
-async function main() {
-  console.log("start");
-  await promise;
-  console.log("timer callback");
-  console.log("end");
-}
-main();
-
-// logs:
-// start
-// timer callback
-// end
-```
-
-Let's try to follow the same pattern.
-
-```lua
-local function promise(resolve)
-  vim.fn.timer_start(2000, resolve)
-end
-
--- how can we create this syntax?
-async local function main()
-  vim.print "start"
-  await promise -- and this?
-  vim.print "timer callback"
-  vim.print "end"
-end
-main()
-```
-
-What we want from `await` is to begin executing the promise, pause, resume when the async action in
-the promise is complete, and continue on. Using coroutines, we can achieve this with just a few more
-lines of code than with JavaScript.
-
-```lua
-local function promise(resolve)
-  vim.fn.timer_start(2000, resolve)
-end
-
---- @param promise fun(resolve: fun():nil):nil
-local await = function(promise)
-  local thread = coroutine.running()
-  local resume_callback = function() coroutine.resume(thread) end
-  promise(resume_callback)
-  coroutine.yield()
-end
-
-local function main()
-  vim.print "start"
-  await(promise)
-  vim.print "timer callback"
-  vim.print "end"
-end
-coroutine.resume(coroutine.create(main))
-vim.print "after resume"
-
--- prints:
--- start
--- after resume
--- timer callback
--- end
-```
-
-Let's walk through the execution of this code:
-
-- A coroutine is created with the function `main` and immediately resumed
-- `"start"` is printed
-- `await` is called with `promise`
-- `promise` is called, triggering the 2 second timer and scheduling `resume_callback` to be called
-  at the end of the timer
-- `coroutine.yield()` pauses the coroutine running `main`
-- `"after resume"` is printed
-- 2 seconds pass, triggering the callback passed to `timer_start` - which calls `resume_callback`
-- `resume_callback` calls `coroutine.resume()`, which resumes the coroutine that's running `main`
-- `"timer callback"` is printed
-- `"end"` is printed
-
-Notice that `await` assumes that it's called in the context of a coroutine (i.e. it uses
-`coroutine.running`), which is why the code above wraps `main` in a `coroutine.resume` and
-`coroutine.create`. However this code has a flaw: errors thrown in `main` are silently swallowed!
-Try running this snippet:
-
-```lua
-local function main()
-  error "Swallowed!"
-end
-coroutine.resume(coroutine.create(main))
-```
-
-This is where a dedicated `async` comes into play:
-
-```lua
---- @param fn fun(...):nil
-local async = function(fn)
-  return function(...)
-    local ok, err = coroutine.resume(coroutine.create(fn), ...)
-    if not ok then error(err) end
-  end
-end
-```
-
-Updating `main`, that gives us:
-
-```lua
-local function promise(resolve)
-  vim.fn.timer_start(2000, resolve)
-end
-
-local main = async(function()
-  vim.print "start"
-  await(promise)
-  vim.print "timer callback"
-  vim.print "end"
-end)
-main()
-```
-
----
-
-One downside of the current `await` function is that it assumes that `resume_callback` isn't called
-immediately i.e. if it was called immediately, then the coroutine would _first_ resume _then_
-yield - with nothing to resume the paused coroutine afterwards! A safer approach is to wrap
-`promise` in `vim.schedule_wrap`, which you can think of as a `timer_start` with a timeout of `0`:
-
-```lua
---- @param promise fun(resolve: fun():nil):nil
-local await = function(promise)
-  local thread = coroutine.running()
-  assert(thread ~= nil, "`await` can only be called in a coroutine")
-  local scheduled_promise = vim.schedule_wrap(promise)
-  local resume_callback = function() coroutine.resume(thread) end
-  scheduled_promise(resume_callback)
-  coroutine.yield()
-end
-```
-
-## Batching part 3: async-await
-
-Back to our batcher function, we can use `async` and `await` to set the results buffer at the same
-level of indentation as the `iterator_batcher`:
-
-```lua
-local populate_results = async(function(input)
-  local results = {}
-  local promise = function(resolve)
-    iterator_batcher(
-      function() return ipairs(large_tbl) end,
-      function(entry)
-        table.insert(results, ("%d :: %s"):format(entry, input))
-      end,
-      resolve
-    )
-  end
-  await(promise)
-  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
-end)
-```
-
-Or a bit more reusable:
-
-```lua
---- @generic InvariantState, ControlVar
---- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
---- @param on_iteration fun(entry: ControlVar):nil
---- @param batch_size_inclusive? number
-local function async_iterator_batcher(iterator_factory, on_iteration, batch_size_inclusive)
-  return function(resolve)
-    iterator_batcher(iterator_factory, on_iteration, resolve, batch_size_inclusive)
-  end
-end
-
-local populate_results = async(function(input)
-  local results = {}
-  local promise = async_iterator_batcher(
-    function() return ipairs(large_tbl) end,
-    function(entry)
-      table.insert(results, ("%d :: %s"):format(entry, input))
-    end
-  )
-  await(promise)
-  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
-end)
 ```
 
 ## Batching part 3: cancel stale iterations
 
-One missing feature of our implementation is the ability to cancel an ongoing process. Our
+One missing feature of our implementation is the ability to cancel an ongoing iteration. Our
 boilerplate code could make very good use of such a feature: there's no need to process old user
 inputs since we only want to display the results for the latest user input. This can be achieved by
 tracking the current instance of `populate_results` with a `current_query_id` variable:
 
 ```lua
+--- @class BatchedIteratorOpts
+--- @field on_complete? fun():nil
+--- @field batch_size? number
+---
+--- new field
+---
+--- @field should_cancel fun():boolean
+
 --- @generic InvariantState, ControlVar
 --- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
 --- @param on_iteration fun(entry: ControlVar):nil
---- @param on_complete fun():nil
----
---- new parameter
----
---- @param should_cancel fun():boolean
---- @param batch_size_inclusive? number
-local function iterator_batcher(iterator_factory, on_iteration, on_complete, should_cancel, batch_size_inclusive)
-  batch_size_inclusive = batch_size_inclusive or 100
+--- @param opts? BatchedIteratorOpts
+local function batched_iterator(iterator_factory, on_iteration, opts)
+  opts = opts or {}
+  local batch_size = opts.batch_size or 100
+  local on_complete = opts.on_complete or (function() end)
+  local should_cancel = opts.should_cancel or (function() return false end)
 
   local iter_fn, invariant_state, control_var = iterator_factory()
   local step
   step = function()
     local num_processed = 0
-    while num_processed < batch_size_inclusive do
+    while num_processed < batch_size do
       -- and its invocation
       if should_cancel() then return end
 
@@ -485,61 +291,63 @@ local function iterator_batcher(iterator_factory, on_iteration, on_complete, sho
   step()
 end
 
---- @generic InvariantState, ControlVar
---- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
---- @param on_iteration fun(entry: ControlVar):nil
----
---- new parameter
----
---- @param should_cancel fun():boolean
---- @param batch_size_inclusive? number
-local function async_iterator_batcher(iterator_factory, on_iteration, should_cancel, batch_size_inclusive)
-  return function(resolve)
-    -- `should_cancel` is also passed along to `iterator_batcher`
-    iterator_batcher(iterator_factory, on_iteration, resolve, should_cancel, batch_size_inclusive)
-  end
-end
-
 -- new variable
 local current_query_id = 0
 
-local populate_results = async(function(input)
+local populate_results = function(input)
   current_query_id = current_query_id + 1
   local this_query_id = current_query_id
 
   local results = {}
-  local promise = async_iterator_batcher(
+  batched_iterator(
     function() return ipairs(large_tbl) end,
     function(entry)
       table.insert(results, ("%d :: %s"):format(entry, input))
     end,
-    -- new argument
-    function()
-      return this_query_id ~= current_query_id
-    end
+    {
+      on_complete = function()
+        vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
+      end,
+      -- new argument
+      should_cancel = function()
+        return this_query_id ~= current_query_id
+      end
+    }
   )
-  await(promise)
-  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
-end)
+end
 ```
 
-## An alternative to batching: time-based yielding
+## An alternative to batching: throttled iterators
 
 An alternative to batching is to simply pause execution every `n` milliseconds - an approach
 inspired by [`mini.pick`](https://github.com/nvim-mini/mini.pick).
 
 In this solution we'll support generic iterators as before, but use coroutines internally to
-occasionally pause and resume in a `vim.schedule`.
+occasionally pause and resume via `vim.schedule`.
 
 ```lua
+-- `coroutine.resume` will return - but not throw - errors
+local function safe_resume(...)
+  local ok, err = coroutine.resume(...)
+  if not ok then
+    error(err)
+  end
+end
+
+--- @class ThrottledIteratorOpts
+--- @field on_complete? fun():nil
+--- @field threshold_ns? number
+--- @field should_cancel? fun():boolean
+
 --- @generic InvariantState, ControlVar
 --- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
 --- @param on_iteration fun(entry: ControlVar):nil
---- @param on_complete fun():nil
---- @param should_cancel fun():boolean
---- @param threshold_ns? number
-local function iterator_throttled(iterator_factory, on_iteration, on_complete, should_cancel, threshold_ns)
-  threshold_ns = threshold_ns or (10 * 1000000)
+--- @param opts? ThrottledIteratorOpts
+local function throttled_iterator(iterator_factory, on_iteration, opts)
+  opts = opts or {}
+  local threshold_ns = opts.threshold_ns or (10 * 1000000)
+  local on_complete = opts.on_complete or (function() end)
+  local should_cancel = opts.should_cancel or (function() return false end)
 
   local function create_throttle()
     local last_yield = vim.loop.hrtime()
@@ -548,7 +356,7 @@ local function iterator_throttled(iterator_factory, on_iteration, on_complete, s
       if (now - last_yield) >= threshold_ns then
         last_yield = now
         local thread = coroutine.running()
-        vim.schedule(function() coroutine.resume(thread) end)
+        vim.schedule(function() safe_resume(thread) end)
         coroutine.yield()
       end
     end
@@ -574,148 +382,42 @@ local function iterator_throttled(iterator_factory, on_iteration, on_complete, s
     end
   end
 
-  local promise = async(process)
-  promise()
-end
-```
-
-The main advantage of `iterator_throttled` over `iterator_batcher` is that `iterator_throttled` is
-hardware-independent. `iterator_batcher` yields every `n` batches, regardless of how long those
-batches take to process on the machine in question. 10 nanoseconds, on the other hand, is always 10
-nanoseconds.
-
-For completeness, here's an `async_iterator_batcher` and its invocation:
-
-```lua
---- @generic InvariantState, ControlVar
---- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
---- @param on_iteration fun(entry: ControlVar):nil
---- @param should_cancel fun():boolean
---- @param threshold_ns? number
-local function async_iterator_throttled(iterator_factory, on_iteration, should_cancel, threshold_ns)
-  return function(resolve)
-    iterator_throttled(iterator_factory, on_iteration, resolve, should_cancel, threshold_ns)
-  end
+  safe_resume(coroutine.create(process))
 end
 
 local current_query_id = 0
 
-local populate_results = async(function(input)
+local populate_results = function(input)
   current_query_id = current_query_id + 1
   local this_query_id = current_query_id
 
   local results = {}
-  local promise = async_iterator_throttled(
+  throttled_iterator(
     function() return ipairs(large_tbl) end,
     function(entry)
       table.insert(results, ("%d :: %s"):format(entry, input))
     end,
-    function()
-      return this_query_id ~= current_query_id
-    end
+    {
+      on_complete = function()
+        vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
+      end,
+      should_cancel = function()
+        return this_query_id ~= current_query_id
+      end
+    }
   )
-  await(promise)
-  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
-end)
+end
 ```
 
-## Bonus: Class-based builder patterns
+The main advantage of `throttled_iterator` over `batched_iterator` is that `throttled_iterator` is
+hardware-independent. `batched_iterator` yields every `n` batches, regardless of how long those
+batches take to process on the machine in question. 10 milliseconds, on the other hand, is always 10
+milliseconds.
+
+## Bonus: A class-based builder pattern
 
 I'm personally a fan of the builder pattern, so I prefer to use class-based functions like the
 following:
-
-```lua
---- @class Batch
---- @field _iterator_factory fun(): ((fun(invariant_state: any, control_var: any):any), any, any)
---- @field _batch_size_inclusive number
---- @field _should_cancel fun():boolean
-local Batch = {}
-Batch.__index = Batch
-
---- @generic InvariantState, ControlVar
---- @param iterator_factory fun(): ((fun(invariant_state: InvariantState, control_var: ControlVar):ControlVar), InvariantState, ControlVar)
---- @return Batch
-function Batch:new(iterator_factory)
-  local this = {
-    _iterator_factory = iterator_factory,
-    _batch_size_inclusive = math.huge,
-    _should_cancel = function() return false end,
-  }
-
-  setmetatable(this, Batch)
-  return this
-end
-
---- @param size number
---- @return Batch
-function Batch:size(size)
-  self._batch_size_inclusive = size
-  return self
-end
-
---- @param should_cancel fun(): boolean
---- @return Batch
-function Batch:should_cancel(should_cancel)
-  self._should_cancel = should_cancel
-  return self
-end
-
---- @generic T
---- @param on_iteration fun(entry: T):nil
---- @param on_complete fun():nil
---- @return nil
-function Batch:each(on_iteration, on_complete)
-  local iter_fn, invariant_state, control_var = self._iterator_factory()
-  local step
-  step = function()
-    local num_processed = 0
-    while num_processed < self._batch_size_inclusive do
-      if self._should_cancel() then return end
-      local values = { iter_fn(invariant_state, control_var), }
-      control_var = values[1]
-
-      if control_var == nil then
-        on_complete()
-        return
-      end
-
-      on_iteration(unpack(values))
-      num_processed = num_processed + 1
-    end
-    vim.schedule(step)
-  end
-  step()
-end
-
---- @generic T
---- @param on_iteration fun(entry: T):nil
---- @return fun(resolve: fun():nil):nil
-function Batch:each_async(on_iteration)
-  return function(resolve) self:each(on_iteration, resolve) end
-end
-
-local current_query_id = 0
-
-local populate_results = async(function(input)
-  current_query_id = current_query_id + 1
-  local this_query_id = current_query_id
-
-  local results = {}
-  local promise = Batch
-      :new(function() return ipairs(large_tbl) end)
-      :size(100)
-      :should_cancel(function()
-        return this_query_id ~= current_query_id
-      end)
-      :each_async(function(entry)
-        table.insert(results, ("%d :: %s"):format(entry, input))
-      end)
-  await(promise)
-  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
-end)
-```
-
-Or:
 
 ```lua
 --- @class Throttle
@@ -734,6 +436,7 @@ function Throttle:new(iterator_factory)
     _iterator_factory = iterator_factory,
     _threshold_ns = ns_10,
     _should_cancel = function() return false end,
+    _on_complete = function() end,
   }
 
   setmetatable(this, Throttle)
@@ -747,18 +450,24 @@ function Throttle:threshold_ns(threshold_ns)
   return self
 end
 
---- @param should_cancel fun(): boolean
+--- @param should_cancel fun():boolean
 --- @return Throttle
 function Throttle:should_cancel(should_cancel)
   self._should_cancel = should_cancel
   return self
 end
 
---- @generic T
---- @param on_iteration fun(entry: T):nil
 --- @param on_complete fun():nil
+--- @return Throttle
+function Throttle:on_complete(on_complete)
+  self._on_complete = on_complete
+  return self
+end
+
+--- @generic T
+--- @param on_iteration fun(entry:T):nil
 --- @return nil
-function Throttle:each(on_iteration, on_complete)
+function Throttle:each(on_iteration)
   local function create_throttle()
     local last_yield = vim.loop.hrtime()
     return function()
@@ -784,7 +493,7 @@ function Throttle:each(on_iteration, on_complete)
       control_var = values[1]
 
       if control_var == nil then
-        on_complete()
+        self._on_complete()
         return
       end
 
@@ -792,36 +501,29 @@ function Throttle:each(on_iteration, on_complete)
     end
   end
 
-  local promise = async(process)
-  promise()
-end
-
---- @generic T
---- @param on_iteration fun(entry: T):nil
---- @return fun(resolve: fun():nil):nil
-function Throttle:each_async(on_iteration)
-  return function(resolve) self:each(on_iteration, resolve) end
+  coroutine.resume(coroutine.create(process))
 end
 
 local current_query_id = 0
 
-local populate_results = async(function(input)
+local populate_results = function(input)
   current_query_id = current_query_id + 1
   local this_query_id = current_query_id
 
   local results = {}
-  local promise = Throttle
+  Throttle
       :new(function() return ipairs(large_tbl) end)
       :threshold_ns(10)
       :should_cancel(function()
         return this_query_id ~= current_query_id
       end)
-      :each_async(function(entry)
+      :on_complete(function()
+        vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
+      end)
+      :each(function(entry)
         table.insert(results, ("%d :: %s"):format(entry, input))
       end)
-  await(promise)
-  vim.api.nvim_buf_set_lines(results_bufnr, 0, -1, strict_indexing, results)
-end)
+end
 ```
 
-Thanks for reading.
+I'll leave the `Batch` class as an exercise to the reader - thanks for reading.
