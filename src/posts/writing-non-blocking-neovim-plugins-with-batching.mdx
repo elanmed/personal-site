@@ -628,7 +628,7 @@ Batch.__index = Batch
 --- @return Batch
 function Batch:new(iterator_factory)
   local this = {
-    _iteratory_factory = iterator_factory,
+    _iterator_factory = iterator_factory,
     _batch_size_inclusive = math.huge,
     _should_cancel = function() return false end,
   }
