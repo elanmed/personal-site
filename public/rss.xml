@@ -5,7 +5,7 @@
     <description>An rss feed for Elan Medoff's blog</description>
     <atom:link href="https://elanmed.dev/rss.xml" rel="self" type="application/rss+xml" />
     <language>en-us</language>
-    <pubDate>Sun, 04 Jan 2026 22:02:15 GMT</pubDate>
+    <pubDate>Mon, 05 Jan 2026 02:37:48 GMT</pubDate>
     <lastBuildDate>Sun, 04 Jan 2026 05:00:00 GMT</lastBuildDate>
     <docs>https://www.rssboard.org/rss-specification</docs>
     <managingEditor>info@elanmed.dev (Elan Medoff)</managingEditor>
@@ -79,6 +79,13 @@
     <description>The stack I chose, or how I learned to stop worrying and love Next.js</description>
     <pubDate>Fri, 05 May 2023 04:00:00 GMT</pubDate>
     <guid>https://elanmed.dev/how-i-built-my-blog</guid>
+    </item>
+    <item>
+    <title>JavaScript-Style Promises in Lua</title>
+    <link>https://elanmed.dev/blog/javascript-style-promises-in-lua</link>
+    <description>Borrowing the ergonomics of async-await to avoid callback-hell in Lua</description>
+    <pubDate>Sun, 04 Jan 2026 05:00:00 GMT</pubDate>
+    <guid>https://elanmed.dev/javascript-style-promises-in-lua</guid>
     </item>
     <item>
     <title>Lessons From Reading a Thousand Comics: An Intro</title>
