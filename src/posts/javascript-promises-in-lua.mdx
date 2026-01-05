@@ -1,0 +1,283 @@
+---
+title: "Template title"
+abstract: "Template abstract"
+lastUpdated: "October 23, 2023"
+slug: javascript-promises-in-lua
+tags:
+  - software eng
+  - typescript
+collection: null
+isPublished: false
+---
+
+# JavaScript Promises in Lua
+
+Neovim's Lua's asynchronous APIs are callback-based. For example, `vim.system` accepts two
+arguments: a table of strings to form a shell command and a callback to run when the shell command
+completes.
+
+```lua
+vim.system({ "sleep", "3" }, function(out)
+  vim.print("status code: " .. tostring(out.code))
+end)
+```
+
+Running this code, you'll notice that the editor remains responsive - the `sleep` function is run in
+a background thread. That's great, but it comes at the cost of a callback-based API. In this case
+there's nothing wrong with one extra level on indentation, but callback-based APIs have a tendency
+to scale poorly when nested:
+
+```lua
+vim.system({ "sleep", "3" }, function(out)
+  vim.print("sleep 3 status code: " .. tostring(out.code))
+
+  vim.system({ "sleep", "2" }, function(out)
+    vim.print("sleep 2 status code: " .. tostring(out.code))
+
+    vim.system({ "sleep", "1" }, function(out)
+      vim.print("sleep 1 status code: " .. tostring(out.code))
+    end)
+  end)
+end)
+```
+
+Interestingly, you can avoid passing a callback `vim.system` by appending `:wait()`:
+
+```lua
+local out3 = vim.system({ "sleep", "3" }):wait()
+vim.print("sleep 3 status code: " .. tostring(out3.code))
+
+local out2 = vim.system({ "sleep", "2" }):wait()
+vim.print("sleep 2 status code: " .. tostring(out2.code))
+
+local out1 = vim.system({ "sleep", "1" }):wait()
+vim.print("sleep 1 status code: " .. tostring(out1.code))
+```
+
+Using this `wait` solves the indentation issue, but the editor is left unresponsive. Is there a way
+to combine the ergonomics of `wait` with the asynchronous behavior of the callback argument?
+
+## Mimicking JavaScript's await
+
+The core of this solution uses three functions: `async`, `await`, and a `promise` - I work in web
+development, so this is the pattern I'm most comfortable with.
+
+In JavaScript, we would "promisify" `vim.system` by creating a promise that resolves in the
+callback:
+
+```js
+const promise = new Promise((resolve) => {
+  // not a real js API
+  vim.system(["sleep", "3"], (out) => {
+    resolve(out);
+  });
+});
+
+async function main() {
+  const out = await promise;
+  console.log("status code: " + out.code);
+}
+main();
+```
+
+Let's try to follow the same pattern:
+
+```lua
+local function promise(resolve)
+  vim.system({ "sleep", "3" }, function(out)
+    resolve(out)
+  end)
+end
+
+-- how can we create this syntax?
+async local function main()
+  local out = await promise -- and this?
+  vim.print("status code: " .. tostring(out.code))
+end
+main()
+```
+
+What we want from `await` is to begin executing the promise, pause, resume when the async action in
+the promise is complete, and continue on. Using coroutines, we can achieve this with just a few more
+lines of code than with JavaScript.
+
+```lua
+local function promise(resolve)
+  vim.system({ "sleep", "3" }, resolve)
+end
+
+--- @param promise fun(resolve: fun():nil):nil
+local await = function(promise)
+  local thread = coroutine.running()
+  local resolve = function() coroutine.resume(thread) end
+  promise(resolve)
+  coroutine.yield()
+end
+
+local function main()
+  vim.print "start"
+  await(promise)
+  vim.print "end"
+end
+coroutine.resume(coroutine.create(main))
+vim.print "after resume"
+
+-- prints:
+-- start
+-- after resume
+-- end
+```
+
+Let's walk through the execution of this code:
+
+- A coroutine is created with the function `main` and immediately resumed
+- `"start"` is printed
+- `await` is called with `promise`
+- `promise` is called, triggering the 2 second timer and scheduling `resolve` to be called at the
+  end of the timer
+- `coroutine.yield()` pauses the coroutine running `main`
+- `"after resume"` is printed
+- 2 seconds pass, triggering the callback passed to `timer_start` - which calls `resolve`
+- `resolve` calls `coroutine.resume()`, which resumes the coroutine that's running `main`
+- `"end"` is printed
+
+The pausing logic works well, but how can we get access to the `out` resolved value? We need two
+small changes:
+
+1. Accept arguments in `resolve` and pass them along to `coroutine.resume`
+2. Return `coroutine.yield()`
+
+```lua
+--- @param promise fun(resolve: fun():nil):nil
+local await = function(promise)
+  local thread = coroutine.running()
+  local resolve = function(...) coroutine.resume(thread, ...) end
+  promise(resolve)
+  return coroutine.yield()
+end
+```
+
+Now when `resolve` is called with `out`, it passes the value along to `coroutine.resume` which in
+turn passes it to the `coroutine.yield`. Check out the [docs](https://www.lua.org/pil/9.1.html) for
+more info on passing values back and forth between `resume` and `yield`.
+
+---
+
+Another downside of the current `await` function is that it assumes that `resume_callback` isn't
+called immediately i.e. if it was called immediately, then the coroutine would _first_ resume _then_
+yield - with nothing to resume the paused coroutine afterwards! A safer approach is to wrap
+`promise` in `vim.schedule_wrap`, which you can think of as a `timer_start` with a timeout of `0`:
+
+```lua
+--- @param promise fun(resolve: fun():nil):nil
+local await = function(promise)
+  local thread = coroutine.running()
+  assert(thread ~= nil, "`await` can only be called in a coroutine")
+  local scheduled_promise = vim.schedule_wrap(promise)
+  local resolve = function(...) coroutine.resume(thread, ...) end
+  scheduled_promise(resolve)
+  return coroutine.yield()
+end
+```
+
+Updating `main`:
+
+```lua
+local function promise(resolve)
+  vim.system({ "sleep", "3" }, resolve)
+end
+
+-- local await ...
+
+local function main()
+  local out = await(promise)
+  vim.print("status code: " .. tostring(out.code))
+end
+coroutine.resume(coroutine.create(main))
+vim.print "after resume"
+
+-- prints:
+-- after resume
+-- status code: 0
+```
+
+## Mimicking JavaScript's async
+
+Notice that `await` assumes that it's called in the context of a coroutine (i.e. it uses
+`coroutine.running`), which is why the code above wraps `main` in a `coroutine.resume` and
+`coroutine.create`. However this code has a flaw: errors thrown in `main` are silently swallowed!
+Try running this snippet:
+
+```lua
+local function main()
+  error "Swallowed!"
+end
+coroutine.resume(coroutine.create(main))
+```
+
+Thankfully, `coroutine.resume` returns its error in a `pcall`-like fashion, and which can then be
+re-thrown with a helper:
+
+```lua
+local function safe_resume(...)
+  local ok, err = coroutine.resume(...)
+  if not ok then error(err) end
+end
+
+local function main()
+  error "Swallowed!"
+end
+safe_resume(coroutine.create(main))
+```
+
+We can extend `safe_resume` to also call `coroutine.create` in its own helper function: `async`.
+
+```lua
+--- @param fn fun(...):nil
+local async = function(fn)
+  return function(...)
+    safe_resume(coroutine.create(fn), ...)
+  end
+end
+
+local function promise(resolve)
+  vim.system({ "sleep", "3" }, resolve)
+end
+
+--- @param promise fun(resolve: fun():nil):nil
+local await = function(promise)
+  local thread = coroutine.running()
+  assert(thread ~= nil, "`await` can only be called in a coroutine")
+  local scheduled_promise = vim.schedule_wrap(promise)
+  -- updated to use `safe_resolve`
+  local resolve = function(...) safe_resume(thread, ...) end
+  scheduled_promise(resolve)
+  return coroutine.yield()
+end
+
+local main = async(function()
+  local out = await(promise)
+  vim.print("status code: " .. tostring(out.code))
+end)
+main()
+vim.print "after resume"
+```
+
+And finally, a promisified version of `vim.system`:
+
+```lua
+--- @param cmd string[]
+local vim_system = function(cmd)
+  return function(resolve)
+    vim.system(cmd, function(out)
+      resolve(out)
+    end)
+  end
+end
+
+local main = async(function()
+  local out = await(vim_system({ "sleep", "3" }))
+  vim.print("status code: " .. tostring(out.code))
+end)
+main()
+```
