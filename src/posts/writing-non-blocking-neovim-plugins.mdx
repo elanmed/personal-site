@@ -14,12 +14,10 @@ isPublished: true
 
 When building a process-intensive Neovim plugin, one of the first things you'll encounter is an
 unresponsive editor: since Neovim's Lua runtime is single threaded, the UI can't update while
-something else is running on the main thread. Thankfully, with a bit of work and a few abstractions,
-we can prevent the editor from hanging.
+something else is running on the main thread.
 
-First, we’ll build a classic batching iterator that processes fixed-size chunks of `n` items, then
-move on to a throttled iterator that processes as many items as possible within `m` seconds. Let's
-get started.
+In this article we'll build two solutions: a batching iterator that processes `n` items at a time,
+and a throttled iterator that runs for `m` milliseconds at a time.
 
 ## Boilerplate
 
@@ -76,6 +74,7 @@ function will run.
 Let's start by creating a large table and looping over it to populate the results buffer:
 
 ```lua
+--- type number[]
 local large_tbl = {}
 for i = 1, 100000 do
   table.insert(large_tbl, i)
@@ -95,9 +94,9 @@ end
 ```
 
 You'll notice that the UI freezes while typing - the entire loop needs to complete before Neovim can
-update the UI with the latest keystroke. Looping a hundred thousand times might seem a bit
+update the input buffer with the latest keystroke. Looping a hundred thousand times might seem a bit
 contrived, but I've run into this scenario several times when processing results from commands such
-as `fd` and `rg`. How do we fix this?
+as `fd` and `rg`. How can we fix this?
 
 ## Batching part 1: the basics
 
@@ -183,11 +182,8 @@ A quick crash-course on iterators in Lua (based on the official
   Otherwise, the control variable is set to the first value returned by the iterator function, and
   the iterator is called again with the (static) invariant state and the (updated) control variable
 
-The names are a bit academic, but I prefer to use the nomenclature in the documentation rather than
-make something up myself.
-
-The implementation below uses several generic types for clarity, but that can be skipped - the code
-itself is the same either way.
+The names are a bit academic, but I prefer to use the nomenclature in the docs rather than make
+something up myself.
 
 ```lua
 --- @class BatchedIteratorOpts
@@ -241,9 +237,9 @@ local function populate_results(input)
 end
 ```
 
-## Batching part 3: cancel stale iterations
+## Batching part 3: canceling stale iterations
 
-One missing feature of our implementation is the ability to cancel an ongoing iteration. Our
+One missing feature of our implementation is the ability to cancel a stale iteration. Our
 boilerplate code could make very good use of such a feature: there's no need to process old user
 inputs since we only want to display the results for the latest user input. This can be achieved by
 tracking the current instance of `populate_results` with a `current_query_id` variable:
@@ -356,6 +352,7 @@ local function throttled_iterator(iterator_factory, on_iteration, opts)
       if (now - last_yield) >= threshold_ns then
         last_yield = now
         local thread = coroutine.running()
+        -- scheduling ensures that `yield` is called before `resume`
         vim.schedule(function() safe_resume(thread) end)
         coroutine.yield()
       end
@@ -367,7 +364,7 @@ local function throttled_iterator(iterator_factory, on_iteration, opts)
 
     local iter_fn, invariant_state, control_var = iterator_factory()
     while true do
-      should_cancel()
+      if should_cancel() then return end
       maybe_pause()
 
       local values = { iter_fn(invariant_state, control_var), }
@@ -475,7 +472,7 @@ function Throttle:each(on_iteration)
       if (now - last_yield) >= self._threshold_ns then
         last_yield = now
         local thread = coroutine.running()
-        vim.schedule(function() coroutine.resume(thread) end)
+        vim.schedule(function() safe_resume(thread) end)
         coroutine.yield()
       end
     end
@@ -501,7 +498,7 @@ function Throttle:each(on_iteration)
     end
   end
 
-  coroutine.resume(coroutine.create(process))
+  safe_resume(coroutine.create(process))
 end
 
 local current_query_id = 0
