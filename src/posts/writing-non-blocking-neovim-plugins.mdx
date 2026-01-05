@@ -17,11 +17,11 @@ unresponsive editor: since Neovim's Lua runtime is single threaded, the UI can't
 something else is running on the main thread.
 
 In this article we'll build two solutions: a batching iterator that processes `n` items at a time,
-and a throttled iterator that runs for `m` milliseconds at a time.
+and a throttled iterator that runs for `m` nanoseconds at a time.
 
 ## Boilerplate
 
-First, let's set up some boilerplate to experience an unresponsive editor first hand:
+First, let's set up some boilerplate to experience an unresponsive editor firsthand:
 
 ```lua
 local enter_win = true
@@ -162,12 +162,12 @@ end
 > named parameters and move everything else to `opts`
 
 This works for looping over tables, but how about traversing other iterators? For example, the
-`vim.fs.dir(path)` returns an iterator over the items in its path argument - in its current form,
-our batcher wouldn't be able to handle it.
+`vim.fs.dir(path)` function returns an iterator over the items in its path argument - in its current
+form, our batcher wouldn't be able to handle it.
 
 ## Batching part 2: handling generic iterators
 
-A quick crash-course on iterators in Lua (based on the official
+A quick crash course on iterators in Lua (based on the official
 [docs](https://www.lua.org/pil/7.1.html)):
 
 - An iterator is a function that returns the next element in a collection on every invocation
@@ -315,8 +315,8 @@ end
 
 ## An alternative to batching: throttled iterators
 
-An alternative to batching is to simply pause execution every `n` milliseconds - an approach
-inspired by [`mini.pick`](https://github.com/nvim-mini/mini.pick).
+An alternative to batching is to simply pause execution every `n` nanoseconds - an approach inspired
+by [`mini.pick`](https://github.com/nvim-mini/mini.pick).
 
 In this solution we'll support generic iterators as before, but use coroutines internally to
 occasionally pause and resume via `vim.schedule`.
@@ -406,10 +406,10 @@ local populate_results = function(input)
 end
 ```
 
-The main advantage of `throttled_iterator` over `batched_iterator` is that `throttled_iterator` is
+The main advantage of `throttled_iterator` over `batched_iterator` is that the former is
 hardware-independent. `batched_iterator` yields every `n` batches, regardless of how long those
-batches take to process on the machine in question. 10 milliseconds, on the other hand, is always 10
-milliseconds.
+batches take to process on the machine in question. 10 nanoseconds, on the other hand, is always 10
+nanoseconds.
 
 ## Bonus: A class-based builder pattern
 
