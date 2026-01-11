@@ -24,7 +24,7 @@ end)
 
 Running this code, you'll notice that the editor remains responsive - the `sleep` function is run in
 a background thread. That's great, but it comes at the cost of an extra level of indentation. One
-additional level on indentation is fine, but callback-based APIs have a tendency to scale poorly
+additional level of indentation is fine, but callback-based APIs have a tendency to scale poorly
 when nested:
 
 ```lua
@@ -134,11 +134,11 @@ Let's walk through the execution of this code:
 - A coroutine is created with the function `main` and immediately resumed
 - `"start"` is printed
 - `await` is called with `promise`
-- `promise` is called, triggering the 3 second timer and scheduling `resolve` to be called at the
-  end of the timer
+- `promise` is called, triggering the `sleep 3` subprocess and scheduling `resolve` to be called
+  when it completes
 - `coroutine.yield()` pauses the coroutine running `main`
 - `"after resume"` is printed
-- 3 seconds pass, triggering the callback passed to `vim.system` - which calls `resolve`
+- `sleep` completes, triggering the callback passed to `vim.system` - which calls `resolve`
 - `resolve` calls `coroutine.resume()`, which resumes the coroutine that's running `main`
 - `"end"` is printed
 
@@ -167,7 +167,8 @@ more info on passing values back and forth between `resume` and `yield`.
 Another shortcoming of the current `await` function is that it assumes that `resolve` isn't called
 immediately i.e. if it was called immediately, then the coroutine would _first_ resume _then_
 yield - with nothing to resume the paused coroutine afterwards! A safer approach is to wrap
-`promise` in `vim.schedule_wrap`, which ensures the callback executes in a future event loop cycle.
+`promise` in `vim.schedule_wrap`, which ensures the callback executes in a future event loop
+iteration.
 
 ```lua
 --- @param promise fun(resolve: fun():nil):nil
@@ -206,7 +207,7 @@ vim.print "after resume"
 
 Notice that `await` assumes that it's called in the context of a coroutine (it uses
 `coroutine.running`) which is why the code above wraps `main` in a `coroutine.resume` and
-`coroutine.create`. However this code has a flaw: errors thrown in `main` are silently swallowed!
+`coroutine.create`. However this code has a flaw: errors raised in `main` are silently swallowed!
 Try running this snippet:
 
 ```lua
@@ -216,8 +217,8 @@ end
 coroutine.resume(coroutine.create(main))
 ```
 
-Thankfully, `coroutine.resume` returns its error in a `pcall`-like fashion, and which can then be
-re-thrown with a helper:
+Thankfully, `coroutine.resume` returns its error in a `pcall`-like fashion which can then be raised
+with a helper:
 
 ```lua
 local function safe_resume(...)

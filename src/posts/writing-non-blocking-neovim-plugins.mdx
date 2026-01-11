@@ -346,9 +346,9 @@ local function throttled_iterator(iterator_factory, on_iteration, opts)
   local should_cancel = opts.should_cancel or (function() return false end)
 
   local function create_throttle()
-    local last_yield = vim.loop.hrtime()
+    local last_yield = vim.uv.hrtime()
     return function()
-      local now = vim.loop.hrtime()
+      local now = vim.uv.hrtime()
       if (now - last_yield) >= threshold_ns then
         last_yield = now
         local thread = coroutine.running()
