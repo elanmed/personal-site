@@ -167,8 +167,8 @@ export function Profile() {
             , a software engineer specializing in web and fullstack development.
           </div>
           <p>
-            These days, I spend most of my time writing my own implementations of popular Neovim
-            plugins: fuzzy finders, file trees, find-and-replace tools, and more.
+            These days, I spend most of my free time writing my own implementations of popular
+            Neovim plugins: fuzzy finders, file trees, find-and-replace tools, and more.
           </p>
           <p>
             I currently work at <Anchor href="https://www.wealthfront.com/">Wealthfront</Anchor> as
